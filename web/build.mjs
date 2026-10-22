@@ -1,0 +1,15 @@
+import {build} from 'esbuild';
+import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
+import {gzipSync} from 'node:zlib';
+import {createHash} from 'node:crypto';
+mkdirSync('../build',{recursive:true});
+const result=await build({entryPoints:['src/app.mjs'],bundle:true,minify:true,format:'esm',target:'es2020',write:false, supported:{'top-level-await':true}});
+const html=readFileSync('index.html','utf8').replace('/*APP_SCRIPT*/',`(async()=>{${result.outputFiles[0].text}})();`);
+writeFileSync('../main/settings.html.gz',gzipSync(html,{level:9,mtime:0}));
+writeFileSync('../build/settings-preview.html',html);
+const files=['index.html','src/app.mjs','src/settings.mjs','src/image.mjs','src/pack.mjs','package.json','package-lock.json','build.mjs'];
+const hashes={};
+for(const name of files) hashes[`web/${name}`]=createHash('sha256').update(readFileSync(name)).digest('hex');
+hashes['main/settings.html.gz']=createHash('sha256').update(readFileSync('../main/settings.html.gz')).digest('hex');
+writeFileSync('../main/settings-assets.json',JSON.stringify(hashes,null,2)+'\n');
+console.log(`Embedded settings page: ${gzipSync(html).length} bytes`);

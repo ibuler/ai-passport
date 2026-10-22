@@ -12,6 +12,17 @@ Keep each asset in the matching subdirectory and document its destination, namin
 
 Store reusable font files and generated font sources in `fonts/`.
 
+Pocket Focus uses [`fonts/SourceHanSansSC-Regular.otf`](fonts/SourceHanSansSC-Regular.otf)
+from [Adobe Source Han Sans](https://github.com/adobe-fonts/source-han-sans/tree/release/OTF/SimplifiedChinese),
+under the SIL Open Font License in [`fonts/LICENSE.txt`](fonts/LICENSE.txt).
+[`fonts/pocket_font_16.c`](fonts/pocket_font_16.c) is generated with `lv_font_conv` 1.5.3,
+16 px, 2 bpp, no compression or kerning, for ASCII, U+3000–301F, U+4E00–9FFF,
+and U+FF01–FF60. It is compiled into the application. The exact conversion command
+is retained in its header; actual coverage and rendering are tested by `tests/pocket`.
+The [`storage/.keep`](storage/.keep) file retains the empty source directory for the
+preformatted application SPIFFS image. See the [application guide](../docs/pocket-focus.md).
+
+
 - Use descriptive names that include the family, weight, size, and format when relevant.
 - Document the source, license, character range, conversion command, and expected destination.
 - Check Flash and internal-RAM impact before adding a font; the ESP32-C3 has no PSRAM.
@@ -41,3 +52,5 @@ Store reusable music and sound-effect sources in `music/`.
 - Prefer 16 kHz, 16-bit mono PCM when it matches the current BSP audio path.
 - Check Flash and internal-RAM cost before embedding audio; stream or chunk long recordings.
 - Do not commit media without redistribution permission.
+
+User-provided home-screen layout reference: [`images/reference/passport-home-reference.png`](images/reference/passport-home-reference.png), 900×1200 PNG, supplied on 2026-10-22. Retained only for local design reference; not embedded in firmware. Redistribution rights were not supplied; do not publish this photograph without permission.

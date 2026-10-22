@@ -1,16 +1,9 @@
 idf_component_register(
-    SRCS "main.c"
-         "demo_navigation.c"
-         "ui_pixel.c"
-         "ui_pixel_math.c"
-         "demo_display.c"
-         "demo_button.c"
-         "demo_audio.c"
-         "demo_battery.c"
-         "demo_radio.c"
-         "demo_wifi.c"
-         "demo_ble.c"
-         "demo_low_power.c"
+    SRCS "main.c" "pocket/model.c" "pocket/store.c" "pocket/network.c"
+         "pocket/player.c" "pocket/feeds.c" "pocket/github.c" "pocket/ui.c" "../assets/fonts/pocket_font_16.c"
     INCLUDE_DIRS "."
-    REQUIRES bsp bt esp_event esp_hw_support esp_netif esp_timer esp_wifi nvs_flash
+    REQUIRES bsp esp_event esp_netif esp_wifi esp_timer nvs_flash spiffs
+             esp_http_server esp_http_client mbedtls json esp_audio_codec
+    EMBED_FILES "settings.html.gz"
 )
+spiffs_create_partition_image(storage "${CMAKE_CURRENT_LIST_DIR}/../assets/storage" FLASH_IN_PROJECT)

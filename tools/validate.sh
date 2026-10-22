@@ -11,6 +11,8 @@ usage() {
 run_static_checks() {
     local actionlint_bin
     local test_dir
+    local gc_link_flag="-Wl,--gc-sections"
+    if [[ "$(uname -s)" == "Darwin" ]]; then gc_link_flag="-Wl,-dead_strip"; fi
 
     python3 tools/check_repo.py
 
@@ -43,6 +45,15 @@ run_static_checks() {
         tests/test_bsp_es8311_sleep_check.c components/bsp/src/bsp_es8311_sleep_check.c \
         -o "${test_dir}/test_bsp_es8311_sleep_check"
     "${test_dir}/test_bsp_es8311_sleep_check"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/pocket/test_model.c main/pocket/model.c -o "${test_dir}/test_pocket"
+    "${test_dir}/test_pocket"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/pocket/test_github.c main/pocket/github.c -o "${test_dir}/test_github"
+    "${test_dir}/test_github"
+    mkdir -p build
+    (cd web && "${NODE:-node}" --test test/*.test.mjs)
+    python3 tools/pocket/check_assets.py
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
         -Itests/bsp_stubs -Icomponents/bsp/include \
         tests/test_bsp_button.c -o "${test_dir}/test_bsp_button"
@@ -60,7 +71,7 @@ run_static_checks() {
     for demo in audio low_power ble wifi; do
         "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
             -ffunction-sections -fdata-sections -Itests/demo_stubs -Imain \
-            "tests/test_demo_${demo}_runtime.c" -Wl,--gc-sections \
+            "tests/test_demo_${demo}_runtime.c" "${gc_link_flag}" \
             -o "${test_dir}/test_demo_${demo}_runtime"
         "${test_dir}/test_demo_${demo}_runtime"
     done

@@ -39,3 +39,9 @@
 - 与当前 BSP 音频路径匹配时优先采用 16 kHz、16 位单声道 PCM。
 - 嵌入音频前评估 Flash 与内部 RAM 成本；长录音应流式或分块。
 - 无再分发许可不提交媒体文件。
+
+## Pocket Focus 应用素材
+
+[`fonts/SourceHanSansSC-Regular.otf`](fonts/SourceHanSansSC-Regular.otf)来自 [Adobe 思源黑体](https://github.com/adobe-fonts/source-han-sans/tree/release/OTF/SimplifiedChinese)，许可证为 [`fonts/LICENSE.txt`](fonts/LICENSE.txt) 中的 SIL Open Font License。生成的 [`fonts/pocket_font_16.c`](fonts/pocket_font_16.c) 使用 `lv_font_conv` 1.5.3，16px、2bpp、不压缩、不含 kerning，范围为 ASCII、U+3000–301F、U+4E00–9FFF、U+FF01–FF60，直接编译进应用。转换命令保留在生成文件头部，`tests/pocket` 检查实际字形覆盖和渲染。[`storage/.keep`](storage/.keep) 保留用于生成预格式化 SPIFFS 镜像的空源目录。详见[应用指南](../docs/pocket-focus.zh_CN.md)。
+
+用户于 2026-10-22 提供的首页布局参考：[`images/reference/passport-home-reference.png`](images/reference/passport-home-reference.png)，900×1200 PNG，仅留作本地设计参考，不嵌入固件。未提供再分发授权，未经许可不要发布此照片。

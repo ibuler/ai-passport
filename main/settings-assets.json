@@ -1,0 +1,11 @@
+{
+  "web/index.html": "bfda0053ad58a1bca1c9a99a7bfc0848122d19db2aa3ba433796f3675964408d",
+  "web/src/app.mjs": "6b32c86cad8bbdb319e148aecf748edc7f3fe748673ecd6f947ae71b5e278b05",
+  "web/src/settings.mjs": "badec410b520335434635cee516473259815b01eca8d44b3f1de8a3e05326cad",
+  "web/src/image.mjs": "6b8abf8483e3d7b5f2b2d29b3860373cb37053b8ba0a9116c802ff96ff55d302",
+  "web/src/pack.mjs": "f7c1b562d080d577e62f21072fbe6adc1234fc9cefdeeeac45f7a2bd3ae8f1f1",
+  "web/package.json": "0ba82a24f2787d9b909aeec8080aeb98f1706939cdfe5ba0683c77cec01298d8",
+  "web/package-lock.json": "8fa79e46eb5d3d4b52a3d7c5af910d60567a8f40c6566fcb6e18c914263a66f1",
+  "web/build.mjs": "dfa794d978f1c346129f3d2a6b9acee2d645fdd7043dca1c5b55f7e3bc1e661b",
+  "main/settings.html.gz": "c1f257156cdc65b0270f190c1c850260ceb694c36fb5ba18bfa93b1738b981d8"
+}
