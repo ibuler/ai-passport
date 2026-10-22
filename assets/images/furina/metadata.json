@@ -1,0 +1,97 @@
+{
+  "created": "2026-10-22",
+  "generator": "built-in image_gen",
+  "subject": "Furina from Genshin Impact; generated fan art, not official artwork",
+  "source_dimensions": [
+    1254,
+    1254
+  ],
+  "frame_dimensions": [
+    128,
+    128
+  ],
+  "frames": [
+    "neutral",
+    "blink",
+    "listening",
+    "thinking",
+    "talk_small",
+    "talk_large",
+    "happy",
+    "sad",
+    "surprised"
+  ],
+  "format": "LVGL RGB565A8, little-endian RGB565 color plane then alpha8 plane per frame, row-major frames",
+  "display_bytes": 442368,
+  "runtime_full_frame_heap_bytes": 0,
+  "conversion": "ffmpeg RGBA scale=384:384:flags=lanczos; row-major 128x128 cells; RGB565 color plane followed by A8 plane",
+  "prompt": "Use case: stylized-concept. Asset type: one production spritesheet for a 240x320 embedded voice assistant display. Create a clean exact 3 by 3 grid of 9 equal square cells, no gaps, no labels, no text, no borders. Each cell depicts the SAME adorable chibi waist-up Furina from Genshin Impact, front-facing at IDENTICAL scale and body position with a fully visible small blue top hat, recognizable white/light-blue short hair and blue-white outfit, heterochromatic blue eyes, dark navy clothing details. Simple clean anime shading, crisp readable large facial features suitable when reduced to 128 pixels. Each cell background is the identical solid very dark blue-green #101D24, no gradients, no scenery, no ornaments outside the figure. Keep hat, hair, shoulders, body and framing exactly aligned in all 9 cells; only face/expression changes. Cell order row major: 1 calm closed-mouth neutral smile, 2 same calm expression with both eyes gently closed blinking, 3 attentive listening eyes wide mouth closed, 4 thoughtful looking slightly up mouth closed, 5 cheerful speaking small open mouth, 6 cheerful speaking larger open mouth, 7 happy closed-eye smile mouth closed, 8 gentle concerned/sad closed mouth, 9 pleasantly surprised eyes wide small O-shaped mouth. Nonsexual wholesome chibi portrait. Characters entirely contained with a little safe margin in each cell. Output square spritesheet, evenly spaced 3x3 grid filling whole canvas.",
+  "files": {
+    "furina-sheet.png": "5110b288bbca24f8c57c4a02a105cb61adf27b6b83d523ded839b054189adf79",
+    "furina.rgb565le": "2a67ab2418be2e010c401f01ca245e9329b0ebd28d6431405c9a67afbb9d04b0",
+    "furina-sheet-transparent.png": "cc0a4dc5b403de9ee87c99b1de4e38e8a1d47c6c8acd5c2d2aa8ad9c273a2e3b",
+    "furina.rgb565a8": "cbeb7534ad1750fb53d22afdfa108c12540d34d36a1e6fa32d20dd92ae2b5c2d",
+    "furina-sheet-soft.png": "70db2c574cb6e2a961ddaf3bbe6b3d6c35e2946cab8d6918bc8609dfb71d2fbf"
+  },
+  "background_edit": {
+    "tool": "built-in image_gen",
+    "source": "furina-sheet.png",
+    "result": "furina-sheet-transparent.png",
+    "intent": "Remove all nine square backgrounds with alpha transparency while preserving character silhouettes and expression order",
+    "prompt": "Edit target: the attached 3x3 spritesheet of Furina chibi portraits. Precise background removal only. Remove every dark navy/blue-green square background in all nine cells and replace all background pixels with genuine alpha transparency, including spaces around hair curls, under hats, beside shoulders and between silhouettes. Preserve every character's appearance, expressions, clothing, white/light blue hair, navy hat and navy clothing; do not mistake dark clothing for background. Preserve the exact 3x3 grid, row-major expression order, alignment, framing and relative scale, with clean anti-aliased silhouette edges. Do not add checkerboard pixels, colored rectangles, shadows, borders, labels or any text. The result must be an actual transparent PNG sprite sheet, with transparent background throughout all nine cells."
+  },
+  "alpha_coverage": [
+    {
+      "transparent_pixels": 4721,
+      "opaque_pixels": 401,
+      "partial_pixels": 11262
+    },
+    {
+      "transparent_pixels": 4805,
+      "opaque_pixels": 462,
+      "partial_pixels": 11117
+    },
+    {
+      "transparent_pixels": 4759,
+      "opaque_pixels": 422,
+      "partial_pixels": 11203
+    },
+    {
+      "transparent_pixels": 4518,
+      "opaque_pixels": 475,
+      "partial_pixels": 11391
+    },
+    {
+      "transparent_pixels": 4772,
+      "opaque_pixels": 407,
+      "partial_pixels": 11205
+    },
+    {
+      "transparent_pixels": 4646,
+      "opaque_pixels": 390,
+      "partial_pixels": 11348
+    },
+    {
+      "transparent_pixels": 4655,
+      "opaque_pixels": 616,
+      "partial_pixels": 11113
+    },
+    {
+      "transparent_pixels": 4782,
+      "opaque_pixels": 393,
+      "partial_pixels": 11209
+    },
+    {
+      "transparent_pixels": 4737,
+      "opaque_pixels": 660,
+      "partial_pixels": 10987
+    }
+  ],
+  "display_source": "furina-sheet-soft.png",
+  "silhouette_edit": {
+    "tool": "built-in image_gen",
+    "source": "furina-sheet-transparent.png",
+    "result": "furina-sheet-soft.png",
+    "prompt": "Edit this exact transparent 3x3 Furina chibi expression spritesheet. Preserve exact nine character expressions, clothes, hair, hat, expression order and even 3x3 cell framing. Fix only the bottom silhouette of every bust: currently clothing ends abruptly in an ugly straight horizontal crop. Make the bottom of each bust a graceful curved oval taper with a subtle soft alpha fade that reaches fully transparent before the cell boundary, like a polished floating character portrait. No straight horizontal cutoff remains, no added badge, circle, frame, platform, rectangular background, checkerboard or cast shadow. Keep all nine figures separated, with identical size and alignment, transparent space between cells. Preserve real PNG alpha background and clean light hair edges; preserve dark clothing. Do not add text. This is a precise asset refinement, not a redesign."
+  }
+}

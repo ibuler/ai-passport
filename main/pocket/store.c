@@ -66,6 +66,15 @@ esp_err_t pf_config_save(const pf_config_t *config)
     xSemaphoreGive(s_lock);
     return err;
 }
+bool pf_music_url(unsigned track, char out[PF_URL])
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool found = track < s_config.count;
+    if (found) strcpy(out, s_config.tracks[track].url);
+    else out[0] = 0;
+    xSemaphoreGive(s_lock);
+    return found;
+}
 uint8_t pf_volume_get(void)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);

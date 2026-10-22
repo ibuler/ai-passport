@@ -1,5 +1,6 @@
 #include "ui.h"
 #include "github.h"
+#include "furina.h"
 #include "lvgl.h"
 #include "src/misc/cache/instance/lv_image_cache.h"
 #include <stdio.h>
@@ -16,7 +17,9 @@ static lv_obj_t *s_root, *s_status, *s_time, *s_battery, *s_indicator, *s_art;
 static lv_obj_t *s_bars[17];
 static pf_page_t s_page;
 static bool s_radio_empty, s_connected;
-static lv_obj_t *s_date, *s_city, *s_weather, *s_aux, *s_menu[6], *s_menu_bg[6];
+static lv_obj_t *s_date, *s_city, *s_weather, *s_aux, *s_menu[PF_APP_COUNT], *s_menu_bg[PF_APP_COUNT];
+static lv_obj_t *s_portrait, *s_subtitle;
+static unsigned s_portrait_frame;
 static lv_obj_t *s_weather_icon, *s_git_chart;
 static pf_weather_icon_t s_icon = PF_ICON_UNKNOWN;
 static pf_github_t s_git_cached;
@@ -188,11 +191,12 @@ void pf_ui_show(pf_page_t page, const pf_config_t *c, const pf_profile_t *profil
     memset(s_bars, 0, sizeof(s_bars)); memset(s_menu, 0, sizeof(s_menu));
     s_font = pocket_font_16; s_font.fallback = &lv_font_montserrat_14;
     s_page = page; s_radio_empty = page == PF_RADIO && !c->count;
-    static const char *headers[] = {"PASSPORT", "YOUR APPS", "MUSIC", "CITY RADIO", "WEATHER", "FOCUS TIMER", "STOPWATCH", "SETTINGS"};
+    static const char *headers[] = {"PASSPORT", "YOUR APPS", "MUSIC", "CITY RADIO", "WEATHER", "FOCUS TIMER", "STOPWATCH", "SETTINGS", "XIAOZHI"};
     text(headers[page], 23, 18, 154, MUTED, &lv_font_montserrat_14);
     s_battery = text("--%", 184, 18, 40, MUTED, &lv_font_montserrat_14);
     block(18, 45, 204, 1, 0x294047);
     s_status = NULL; s_time = NULL; s_indicator = NULL; s_date = NULL; s_city = NULL; s_weather = NULL; s_aux = NULL;
+    s_portrait = NULL; s_subtitle = NULL; s_portrait_frame = 0;
     s_weather_icon = NULL; s_icon = PF_ICON_UNKNOWN;
     s_git_chart = NULL; s_git_drawn = false;
     char safe[PF_TITLE + 4];
@@ -220,13 +224,25 @@ void pf_ui_show(pf_page_t page, const pf_config_t *c, const pf_profile_t *profil
         block(18, 286, 204, 1, 0x294047);
         text("长按 确定:应用 下:后台", 24, 292, 192, MUTED, NULL);
     } else if (page == PF_LAUNCHER) {
-        static const char *apps[] = {"音乐", "城市收音机", "天气", "番茄钟", "秒表", "手机后台"};
-        for (unsigned i = 0; i < 6; i++) {
-            s_menu_bg[i] = block(18, 61 + i * 34, 204, 31, BG); lv_obj_set_style_radius(s_menu_bg[i], 7, 0);
-            s_menu[i] = text(apps[i], 31, 65 + i * 34, 180, INK, NULL);
+        static const char *apps[] = {"小智", "音乐", "城市收音机", "天气", "番茄钟", "秒表", "手机后台"};
+        for (unsigned i = 0; i < PF_APP_COUNT; i++) {
+            s_menu_bg[i] = block(18, 57 + i * 29, 204, 27, BG); lv_obj_set_style_radius(s_menu_bg[i], 7, 0);
+            s_menu[i] = text(apps[i], 31, 61 + i * 29, 180, INK, NULL);
         }
         text("上 / 下选择  确定打开", 24, 275, 192, INK, NULL);
         text("长按确定  返回名片", 24, 297, 192, MUTED, NULL);
+    } else if (page == PF_XIAOZHI) {
+        text("小智", 24, 57, 95, INK, NULL);
+        s_aux = text("音量 35%", 130, 57, 86, MUTED, NULL);
+        s_portrait = lv_image_create(s_root);
+        lv_image_set_src(s_portrait, &pf_furina_frames[0]);
+        lv_obj_set_pos(s_portrait, 56, 102);
+        s_status = text("", 24, 80, 192, ACCENT, NULL);
+        lv_label_set_long_mode(s_status, LV_LABEL_LONG_MODE_DOTS);
+        s_subtitle = text("", 24, 239, 192, INK, NULL);
+        lv_obj_set_height(s_subtitle, 40); lv_label_set_long_mode(s_subtitle, LV_LABEL_LONG_MODE_DOTS);
+        text("确定:开启 / 关闭对话", 24, 281, 192, MUTED, NULL);
+        text("长按:上/下音量 确定返回", 24, 301, 192, MUTED, NULL);
     } else if (page == PF_PLAYER || page == PF_RADIO) {
         supported(safe, sizeof(safe), page == PF_RADIO ? (profile->city[0] ? profile->city : "请先设置城市") : "给自己一段专注时间");
         text(safe, 24, 58, 192, MUTED, NULL);
@@ -271,7 +287,23 @@ void pf_ui_show(pf_page_t page, const pf_config_t *c, const pf_profile_t *profil
     }
     lv_screen_load(s_root); if (old) lv_obj_delete(old);
 }
-void pf_ui_message(const char *message) { if (s_status) lv_label_set_text(s_status, message); }
+void pf_ui_message(const char *message)
+{
+    if (s_status) { char safe[49];pf_notice_text(safe,sizeof(safe),message);lv_label_set_text(s_status,safe); }
+}
+void pf_ui_xiaozhi(const pf_xz_snapshot_t *state, uint32_t ticks, uint8_t volume)
+{
+    if(s_page != PF_XIAOZHI || !s_portrait)return;
+    unsigned frame = pf_xz_portrait(state, ticks);
+    if(frame != s_portrait_frame) { lv_image_set_src(s_portrait, &pf_furina_frames[frame]); s_portrait_frame = frame; }
+    char safe[256];
+    if(state->state==PF_XZ_ERROR)pf_notice_text(safe,sizeof(safe),state->message);
+    else supported(safe,sizeof(safe),state->message);
+    lv_obj_set_y(s_status,state->state==PF_XZ_ERROR?236:80);
+    lv_label_set_text(s_status,safe);
+    supported(safe,sizeof(safe),state->state==PF_XZ_ERROR?"":state->code[0] ? state->code : state->text); lv_label_set_text(s_subtitle,safe);
+    lv_label_set_text_fmt(s_aux,"音量 %u%%",volume);
+}
 void pf_ui_update(const pf_playback_t *p, bool connected, int battery, uint32_t ticks)
 {
     s_connected = connected;
@@ -288,7 +320,8 @@ void pf_ui_update(const pf_playback_t *p, bool connected, int battery, uint32_t 
         lv_label_set_text_fmt(s_time, "%02lu:%02lu", (unsigned long)(p->seconds / 60), (unsigned long)(p->seconds % 60));
         lv_label_set_text(s_indicator, states[p->state]);
         lv_label_set_text_fmt(s_aux, "音量 %u%%", p->volume);
-        if (!s_radio_empty) lv_label_set_text(s_status, p->error[0] ? p->error : p->state == PF_PAUSED ? "确定键继续播放" : p->state == PF_PLAYING ? "正在播放" : "确定键开始 / 重试");
+        char error[49];pf_notice_text(error,sizeof(error),p->error);
+        if (!s_radio_empty) lv_label_set_text(s_status, error[0] ? error : p->state == PF_PAUSED ? "确定键继续播放" : p->state == PF_PLAYING ? (s_page == PF_PLAYER ? "列表循环播放" : "正在播放") : "确定键开始 / 重试");
     }
     if (s_bars[0]) for (unsigned i = 0; i < 17; i++) {
         int h = 8 + ((i * i * 7 + 19 + (p->state == PF_PLAYING ? ticks / 120 : 0) * (i % 4 + 1)) % 43);
@@ -314,7 +347,7 @@ void pf_ui_details(const pf_profile_t *profile, const pf_weather_t *w, int64_t e
             lv_label_set_text(s_aux, pf_weather_description(w->code));
         } else { lv_label_set_text(s_weather, "-- C"); lv_label_set_text(s_aux, profile->city[0] ? "等待天气" : "后台设置"); }
     } else if (s_page == PF_LAUNCHER) {
-        for (unsigned i = 0; i < 6; i++) {
+        for (unsigned i = 0; i < PF_APP_COUNT; i++) {
             lv_obj_set_style_bg_color(s_menu_bg[i], lv_color_hex(i == selection ? 0x1E4648 : BG), 0);
             lv_obj_set_style_text_color(s_menu[i], lv_color_hex(i == selection ? ACCENT : INK), 0);
         }

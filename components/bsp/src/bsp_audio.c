@@ -27,6 +27,7 @@ static uint8_t  s_bits, s_ch;
 static bool     s_opened;
 static bool     s_sleeping;
 static bool     s_initialized;
+static bool     s_playback_only;
 static esp_err_t s_sleep_result;
 static bool     s_codec_release_failed;
 static uint8_t  s_volume;
@@ -94,6 +95,7 @@ static int audio_data_set_fmt(const audio_codec_data_if_t *data,
                               esp_codec_dev_type_t type,
                               esp_codec_dev_sample_info_t *fs) {
     (void)data;
+    if (type == ESP_CODEC_DEV_TYPE_OUT) return audio_track_error(s_data->set_fmt(s_data, type, fs));
     if (type != ESP_CODEC_DEV_TYPE_IN_OUT) return ESP_CODEC_DEV_NOT_SUPPORT;
     // Configure directions separately so a failed TX configuration cannot be
     // hidden by a successful RX configuration. Keep TX enabled while configuring
@@ -233,6 +235,7 @@ static esp_err_t audio_prepare_i2s_reopen(void) {
         ESP_LOGE(TAG, "I2S TX 恢复失败: %s", esp_err_to_name(e));
         return e;
     }
+    if (!s_rx && s_playback_only) return ESP_OK;
     e = s_rx ? i2s_channel_enable(s_rx) : ESP_ERR_INVALID_STATE;
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "I2S RX 恢复失败: %s", esp_err_to_name(e));
@@ -292,6 +295,7 @@ static void audio_cleanup(void) {
     s_opened = false;
     s_sleeping = false;
     s_initialized = false;
+    s_playback_only = false;
     s_sleep_result = ESP_OK;
     s_volume = 0;
     s_hz = 0;
@@ -299,7 +303,7 @@ static void audio_cleanup(void) {
     s_ch = 0;
 }
 
-static esp_err_t i2s_full_duplex_init(void) {
+static esp_err_t audio_i2s_init(void) {
     i2s_chan_config_t chan = {
         .id = BSP_I2S_PORT,
         .role = I2S_ROLE_MASTER,
@@ -309,7 +313,7 @@ static esp_err_t i2s_full_duplex_init(void) {
         .auto_clear_before_cb = false,
         .intr_priority = 0,
     };
-    esp_err_t e = i2s_new_channel(&chan, &s_tx, &s_rx);
+    esp_err_t e = i2s_new_channel(&chan, &s_tx, s_playback_only ? NULL : &s_rx);
     if (e != ESP_OK) { ESP_LOGE(TAG, "i2s_new_channel 失败: %s", esp_err_to_name(e)); return e; }
 
     // 这里的采样率只用于建通道;实际速率由 esp_codec_dev_open() 按需重配。
@@ -341,14 +345,14 @@ static esp_err_t i2s_full_duplex_init(void) {
     if ((e = i2s_channel_init_std_mode(s_tx, &std)) != ESP_OK) {
         ESP_LOGE(TAG, "i2s tx 初始化失败: %s", esp_err_to_name(e)); return e;
     }
-    if ((e = i2s_channel_init_std_mode(s_rx, &std)) != ESP_OK) {
+    if (s_rx && (e = i2s_channel_init_std_mode(s_rx, &std)) != ESP_OK) {
         ESP_LOGE(TAG, "i2s rx 初始化失败: %s", esp_err_to_name(e)); return e;
     }
     // esp_codec_dev_open 内部重配前会先 i2s_channel_disable,而 disable 要求通道处于
     // RUNNING;刚 init 的通道是 READY,会打一条 "channel has not been enabled yet" 错误日志。
     // 这里先 enable 一次让那次 disable 合法(此时 codec 未配,不出声)。
     e = i2s_channel_enable(s_tx);
-    if (e == ESP_OK) e = i2s_channel_enable(s_rx);
+    if (e == ESP_OK && s_rx) e = i2s_channel_enable(s_rx);
     if (e != ESP_OK) ESP_LOGE(TAG, "i2s channel enable 失败: %s", esp_err_to_name(e));
     return e;
 }
@@ -359,7 +363,7 @@ static esp_err_t audio_create_codec(void) {
     s_codec = es8311_codec_new(&(es8311_codec_cfg_t){
         .ctrl_if = &s_checked_ctrl,
         .gpio_if = s_gpio,
-        .codec_mode = ESP_CODEC_DEV_WORK_MODE_BOTH,
+        .codec_mode = s_playback_only ? ESP_CODEC_DEV_WORK_MODE_DAC : ESP_CODEC_DEV_WORK_MODE_BOTH,
         .pa_pin = BSP_I2S_PA_CTRL,
         .pa_reverted = false,
         .master_mode = false,
@@ -373,7 +377,7 @@ static esp_err_t audio_create_codec(void) {
         return ESP_FAIL;
     }
     s_dev = esp_codec_dev_new(&(esp_codec_dev_cfg_t){
-        .dev_type = ESP_CODEC_DEV_TYPE_IN_OUT,
+        .dev_type = s_playback_only ? ESP_CODEC_DEV_TYPE_OUT : ESP_CODEC_DEV_TYPE_IN_OUT,
         .codec_if = s_codec,
         .data_if = &s_checked_data,
     });
@@ -384,13 +388,14 @@ static esp_err_t audio_create_codec(void) {
     return ESP_OK;
 }
 
-esp_err_t bsp_audio_init(void) {
+static esp_err_t audio_init(bool playback_only) {
     if (s_codec_release_failed) return ESP_ERR_INVALID_STATE;
-    if (s_initialized) return ESP_OK;
+    if (s_initialized) return s_playback_only == playback_only ? ESP_OK : ESP_ERR_INVALID_STATE;
     if (s_tx || s_rx || s_ctrl || s_data || s_codec || s_gpio) {
         ESP_LOGE(TAG, "上次音频初始化回滚不完整，拒绝覆盖仍存活的资源句柄");
         return ESP_ERR_INVALID_STATE;
     }
+    s_playback_only = playback_only;
 
     esp_err_t e = bsp_i2c_init();
     if (e != ESP_OK) return e;
@@ -407,7 +412,7 @@ esp_err_t bsp_audio_init(void) {
         return ESP_FAIL;
     }
 
-    if ((e = i2s_full_duplex_init()) != ESP_OK) goto fail;
+    if ((e = audio_i2s_init()) != ESP_OK) goto fail;
 
     s_data = audio_codec_new_i2s_data(&(audio_codec_i2s_cfg_t){
         .port = BSP_I2S_PORT, .tx_handle = s_tx, .rx_handle = s_rx,
@@ -428,6 +433,30 @@ fail:
     if (s_ctrl) (void)es8311_force_sleep();
     audio_cleanup();
     return e;
+}
+
+esp_err_t bsp_audio_init(void) { return audio_init(false); }
+esp_err_t bsp_audio_init_playback(void) { return audio_init(true); }
+
+esp_err_t bsp_audio_deinit(void) {
+    if (s_initialized) {
+        esp_err_t result;
+        if (s_sleeping && s_sleep_result != ESP_OK) {
+            // Unlike repeated sleep(), an explicit release retries the hardware
+            // shutdown before deciding whether channels/interfaces can be freed.
+            result = es8311_force_sleep();
+            esp_err_t stopped = audio_disable_i2s_channels();
+            if (result == ESP_OK) result = stopped;
+            s_sleep_result = result;
+        } else {
+            result = bsp_audio_sleep();
+        }
+        if (result != ESP_OK) return result;
+    }
+    audio_cleanup();
+    if (s_tx || s_rx || s_ctrl || s_data || s_codec || s_gpio || s_codec_release_failed)
+        return ESP_ERR_INVALID_STATE;
+    return ESP_OK;
 }
 
 esp_err_t bsp_audio_set_format(uint32_t hz, uint8_t bits, uint8_t ch) {
@@ -464,7 +493,7 @@ esp_err_t bsp_audio_set_format(uint32_t hz, uint8_t bits, uint8_t ch) {
     // ⚠ open 之后【不要】手动覆写 ES8311 的时钟分频寄存器(REG01~06):
     //   驱动已按采样率与 MCLK 精确算好,覆写会导致 ADC/DAC 时序错乱、录音回放全是杂音。
     //   这里只设麦克风模拟 PGA 增益。
-    r = esp_codec_dev_set_in_gain(s_dev, 30.0f);
+    if (!s_playback_only) r = esp_codec_dev_set_in_gain(s_dev, 30.0f);
     if (r == ESP_CODEC_DEV_OK) r = esp_codec_dev_set_out_vol(s_dev, s_volume);
     if (r != ESP_CODEC_DEV_OK || s_io_error != ESP_CODEC_DEV_OK) {
         e = ESP_FAIL;
@@ -560,7 +589,7 @@ esp_err_t bsp_audio_write(const void *pcm, size_t bytes) {
 }
 
 esp_err_t bsp_audio_read(void *pcm, size_t bytes) {
-    if (!s_dev || !s_opened || s_sleeping) return ESP_ERR_INVALID_STATE;
+    if (s_playback_only || !s_dev || !s_opened || s_sleeping) return ESP_ERR_INVALID_STATE;
     return esp_codec_dev_read(s_dev, pcm, bytes) == 0 ? ESP_OK : ESP_FAIL;
 }
 

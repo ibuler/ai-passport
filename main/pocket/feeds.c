@@ -1,5 +1,6 @@
 #include "services.h"
 #include "github.h"
+#include "xiaozhi.h"
 #include "cJSON.h"
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
@@ -9,6 +10,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "freertos/event_groups.h"
+#include <stdatomic.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +22,10 @@
 #define GITHUB BIT2
 static SemaphoreHandle_t s_lock;
 static TaskHandle_t s_task;
+static EventGroupHandle_t s_events;
+static atomic_bool s_stop;
+static atomic_uint s_deferred;
+#define FEEDS_DONE BIT0
 static pf_weather_t s_weather;
 static pf_catalog_t s_radio;
 static uint64_t s_attempt;
@@ -26,7 +33,7 @@ static uint64_t s_github_attempt;
 static pf_github_t s_github;
 static bool github_yield(void)
 {
-    if (pf_settings_active()) return true;
+    if (atomic_load(&s_stop) || pf_settings_active() || pf_xz_active()) return true;
     pf_playback_t play; pf_player_snapshot(&play);
     return play.state == PF_CONNECTING || play.state == PF_PLAYING || play.state == PF_PAUSED;
 }
@@ -82,7 +89,7 @@ static void github(const char *username, int64_t today)
 }
 static cJSON *fetch_json(const char *url, size_t cap)
 {
-    if (pf_settings_active()) return NULL;
+    if (atomic_load(&s_stop) || pf_settings_active() || pf_xz_active()) return NULL;
     char *body = NULL;
     esp_http_client_config_t cfg = {.url=url, .timeout_ms=1500, .buffer_size=1024, .buffer_size_tx=512,
         .crt_bundle_attach=esp_crt_bundle_attach, .user_agent="PocketPassport/0.2"};
@@ -96,7 +103,7 @@ static cJSON *fetch_json(const char *url, size_t cap)
             if (!body) { esp_http_client_cleanup(http); return NULL; }
             size_t used = 0;
             int64_t end = esp_timer_get_time() + 6000000;
-            while (used < cap && esp_timer_get_time() < end && !pf_settings_active()) {
+            while (used < cap && esp_timer_get_time() < end && !atomic_load(&s_stop) && !pf_settings_active() && !pf_xz_active()) {
                 int n = esp_http_client_read(http, body + used, cap - used > 1024 ? 1024 : cap - used);
                 if (n <= 0) break;
                 used += n;
@@ -147,7 +154,7 @@ static void weather(const pf_profile_t *profile)
         s_weather.valid = true; s_weather.temperature_tenths = lround(temp * 10); s_weather.code = (int)code;
         s_weather.humidity = (int)humidity; s_weather.wind_tenths = lround(wind * 10);
         s_weather.updated_ms = esp_timer_get_time() / 1000; s_weather.message[0] = 0;
-    } else strcpy(s_weather.message, "天气获取失败，确定键重试");
+    } else pf_notice_text(s_weather.message, sizeof(s_weather.message), "天气获取失败，确定键重试");
     xSemaphoreGive(s_lock); cJSON_Delete(json);
 }
 static bool copy_string(cJSON *root, const char *key, char *out, size_t cap)
@@ -189,11 +196,17 @@ static void worker(void *arg)
     for (;;) {
         uint32_t wanted = 0;
         xTaskNotifyWait(0, UINT32_MAX, &wanted, pdMS_TO_TICKS(5000));
-        pending |= wanted;
+        pending |= atomic_exchange(&s_deferred, 0);
+        if (atomic_load(&s_stop)) break;
+        /* Check before allocating the multi-KiB profile, even when no HTTP is due. */
+        if (github_yield()) continue;
+        if (!pf_http_take(0)) continue;
+        /* Playback/settings may have started between the check and the mutex. */
+        if (github_yield()) { pf_http_give(); continue; }
         pf_profile_t *p = malloc(sizeof(*p));
-        if (!p) continue;
+        if (!p) { pf_http_give(); continue; }
         pf_profile_get(p);
-        if ((pending & RADIO) && p->city[0] && pf_radio_count(p)) { radio(p); pending &= ~RADIO; }
+        if ((pending & RADIO) && p->city[0] && pf_radio_count(p)) { radio(p); if (!atomic_load(&s_stop)) pending &= ~RADIO; }
         uint64_t now = esp_timer_get_time() / 1000;
         char username[PF_GITHUB_USER]; pf_github_username_get(username);
         xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -205,29 +218,59 @@ static void worker(void *arg)
         xSemaphoreGive(s_lock);
         pf_playback_t playing; pf_player_snapshot(&playing);
         bool idle = playing.state != PF_PLAYING && playing.state != PF_PAUSED && playing.state != PF_CONNECTING;
-        if (!pf_network_ready() || time(NULL) < 1704067200 || pf_settings_active() || !idle) { free(p); continue; }
-        if (pf_http_take(0)) {
-            if (!pf_settings_active()) {
-                if (p->city[0] && (pending & RADIO)) { radio(p); pending &= ~RADIO; }
-                if (p->city[0] && ((pending & WEATHER) || !s_attempt || now - s_attempt >= 900000)) { s_attempt = now; weather(p); pending &= ~WEATHER; }
-                if (username[0] && !pf_settings_active() && ((pending & GITHUB) || !s_github_attempt || now - s_github_attempt >= (github_valid ? 3600000 : 300000))) {
-                    s_github_attempt = now; github(username, time(NULL) / 86400); pending &= ~GITHUB;
-                }
+        if (!pf_network_ready() || time(NULL) < 1704067200 || pf_settings_active() || !idle) { free(p); pf_http_give(); continue; }
+        if (!pf_settings_active()) {
+            if (p->city[0] && (pending & RADIO)) { radio(p); if (!atomic_load(&s_stop)) pending &= ~RADIO; }
+            if (p->city[0] && ((pending & WEATHER) || !s_attempt || now - s_attempt >= 900000)) { s_attempt = now; weather(p); if (!atomic_load(&s_stop)) pending &= ~WEATHER; }
+            if (username[0] && !pf_settings_active() && ((pending & GITHUB) || !s_github_attempt || now - s_github_attempt >= (github_valid ? 3600000 : 300000))) {
+                s_github_attempt = now; github(username, time(NULL) / 86400); if (!atomic_load(&s_stop)) pending &= ~GITHUB;
             }
-            pf_http_give();
         }
         free(p);
+        pf_http_give();
     }
+    atomic_fetch_or(&s_deferred, pending);
+    xEventGroupSetBits(s_events, FEEDS_DONE);
+    vTaskSuspend(NULL);
 }
 esp_err_t pf_weather_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
-    if (!s_lock || xTaskCreate(worker, "pocket_feeds", 8192, NULL, 3, &s_task) != pdPASS) return ESP_ERR_NO_MEM;
+    s_events = xEventGroupCreate();
+    if (!s_lock || !s_events) return ESP_ERR_NO_MEM;
+    return pf_feeds_resume();
+}
+esp_err_t pf_feeds_pause(void)
+{
+    if (!s_task) return ESP_OK;
+    /* A timed-out stop may acknowledge later; retain that acknowledgement. */
+    if (!atomic_exchange(&s_stop, true)) {
+        xEventGroupClearBits(s_events, FEEDS_DONE);
+        xTaskNotify(s_task, 0, eSetBits);
+    }
+    if (!(xEventGroupWaitBits(s_events, FEEDS_DONE, false, true, pdMS_TO_TICKS(10000)) & FEEDS_DONE)) return ESP_ERR_TIMEOUT;
+    vTaskDelete(s_task); s_task = NULL;
     return ESP_OK;
 }
-void pf_weather_refresh(void) { if (s_task) xTaskNotify(s_task, WEATHER, eSetBits); }
-void pf_radio_refresh(void) { if (s_task) xTaskNotify(s_task, RADIO, eSetBits); }
-void pf_github_refresh(void) { if (s_task) xTaskNotify(s_task, GITHUB, eSetBits); }
+esp_err_t pf_feeds_resume(void)
+{
+    if (s_task) {
+        if (!atomic_load(&s_stop)) return ESP_OK;
+        esp_err_t err = pf_feeds_pause();
+        if (err != ESP_OK) return err;
+    }
+    atomic_store(&s_stop, false);
+    xEventGroupClearBits(s_events, FEEDS_DONE);
+    return xTaskCreate(worker, "pocket_feeds", 8192, NULL, 3, &s_task) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
+}
+static void refresh(unsigned bits)
+{
+    atomic_fetch_or(&s_deferred, bits);
+    if (s_task) xTaskNotify(s_task, 0, eSetBits);
+}
+void pf_weather_refresh(void) { refresh(WEATHER); }
+void pf_radio_refresh(void) { refresh(RADIO); }
+void pf_github_refresh(void) { refresh(GITHUB); }
 void pf_github_snapshot(pf_github_t *out)
 {
     char username[PF_GITHUB_USER]; pf_github_username_get(username);

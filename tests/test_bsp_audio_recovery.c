@@ -17,14 +17,19 @@ struct test_codec_dev {
     const audio_codec_if_t *codec;
     const audio_codec_data_if_t *data;
     bool opened;
+    esp_codec_dev_type_t type;
 };
 static uint8_t registers[256];
 static int fail_reg = -1, fail_value = -1, fail_writes;
 static int fail_tx_fmt, fail_rx_fmt, fail_tx_enable, fail_rx_enable;
 static int fail_codec_delete;
+static int fail_channel_delete;
 static bool tx_data_enabled, rx_data_enabled;
 static unsigned codec_creations, codec_starts, ctrl_creations, ctrl_deletions;
 static bool read_reg0e_reserved_zero;
+static bool rx_requested;
+static unsigned rx_allocations, input_gain_calls;
+static int last_codec_mode;
 
 static int reg_write(const audio_codec_ctrl_if_t *ctrl, int reg, int reg_len,
                      void *value, int size) {
@@ -82,7 +87,10 @@ int audio_codec_delete_gpio_if(const audio_codec_gpio_if_t *gpio) {
 esp_err_t i2s_new_channel(const i2s_chan_config_t *cfg, i2s_chan_handle_t *tx,
                           i2s_chan_handle_t *rx) {
     (void)cfg;
-    *tx = &tx_channel; *rx = &rx_channel;
+    assert(tx);
+    *tx = &tx_channel;
+    rx_requested = rx != NULL;
+    if (rx) { *rx = &rx_channel; rx_allocations++; }
     return ESP_OK;
 }
 esp_err_t i2s_channel_init_std_mode(i2s_chan_handle_t channel, const i2s_std_config_t *cfg) {
@@ -101,11 +109,13 @@ esp_err_t i2s_channel_disable(i2s_chan_handle_t channel) {
 }
 esp_err_t i2s_del_channel(i2s_chan_handle_t channel) {
     assert(!channel->running);
+    if (fail_channel_delete) { --fail_channel_delete; return ESP_FAIL; }
     return ESP_OK;
 }
 
 static bool data_open(const audio_codec_data_if_t *data) { return data != NULL; }
 static int enable_one(bool output, bool enable) {
+    assert(output || rx_requested);
     int *fail = output ? &fail_tx_enable : &fail_rx_enable;
     i2s_chan_handle_t channel = output ? &tx_channel : &rx_channel;
     int result;
@@ -124,6 +134,7 @@ static int data_enable(const audio_codec_data_if_t *data, esp_codec_dev_type_t t
     return result; // Deliberately reproduce the dependency's overwritten TX error.
 }
 static int format_one(bool output, esp_codec_dev_sample_info_t *fs) {
+    assert(output || rx_requested);
     int *fail = output ? &fail_tx_fmt : &fail_rx_fmt;
     i2s_chan_handle_t channel = output ? &tx_channel : &rx_channel;
     (void)i2s_channel_disable(channel);
@@ -161,7 +172,8 @@ static int data_write(const audio_codec_data_if_t *data, uint8_t *pcm, int size)
     return tx_channel.running ? ESP_OK : ESP_FAIL;
 }
 const audio_codec_data_if_t *audio_codec_new_i2s_data(audio_codec_i2s_cfg_t *cfg) {
-    assert(cfg->tx_handle == &tx_channel && cfg->rx_handle == &rx_channel);
+    assert(cfg->tx_handle == &tx_channel);
+    assert(cfg->rx_handle == (rx_requested ? &rx_channel : NULL));
     audio_codec_data_if_t *data = calloc(1, sizeof(*data));
     assert(data);
     *data = (audio_codec_data_if_t){ .is_open = data_open, .enable = data_enable,
@@ -187,6 +199,7 @@ static int codec_enable(const audio_codec_if_t *interface, bool enable) {
     return result;
 }
 const audio_codec_if_t *es8311_codec_new(es8311_codec_cfg_t *cfg) {
+    last_codec_mode = cfg->codec_mode;
     struct test_codec *codec = calloc(1, sizeof(*codec));
     assert(codec);
     codec->base.enable = codec_enable;
@@ -210,20 +223,21 @@ esp_codec_dev_handle_t esp_codec_dev_new(esp_codec_dev_cfg_t *cfg) {
     struct test_codec_dev *dev = calloc(1, sizeof(*dev));
     assert(dev);
     dev->codec = cfg->codec_if; dev->data = cfg->data_if;
+    dev->type = cfg->dev_type;
     return dev;
 }
 int esp_codec_dev_open(esp_codec_dev_handle_t dev, esp_codec_dev_sample_info_t *fs) {
     if (dev->opened) return ESP_OK;
     dev->opened = true; // Real dependency sets this before configuration succeeds.
-    (void)dev->data->set_fmt(dev->data, ESP_CODEC_DEV_TYPE_IN_OUT, fs);
-    (void)dev->data->enable(dev->data, ESP_CODEC_DEV_TYPE_IN_OUT, true);
+    (void)dev->data->set_fmt(dev->data, dev->type, fs);
+    (void)dev->data->enable(dev->data, dev->type, true);
     (void)codec_write((struct test_codec *)dev->codec, 0x02, 0x12); // set_fs ignores I2C failure.
     return dev->codec->enable(dev->codec, true);
 }
 int esp_codec_dev_close(esp_codec_dev_handle_t dev) {
     if (dev->opened) {
         (void)dev->codec->enable(dev->codec, false);
-        (void)dev->data->enable(dev->data, ESP_CODEC_DEV_TYPE_IN_OUT, false);
+        (void)dev->data->enable(dev->data, dev->type, false);
     }
     dev->opened = false;
     return ESP_OK;
@@ -233,6 +247,7 @@ void esp_codec_dev_delete(esp_codec_dev_handle_t dev) {
     free(dev);
 }
 int esp_codec_dev_set_in_gain(esp_codec_dev_handle_t dev, float gain) {
+    input_gain_calls++;
     assert(gain == 30.0f);
     (void)codec_write((struct test_codec *)dev->codec, 0x16, 0x0a);
     return ESP_OK;
@@ -271,12 +286,19 @@ static void assert_active(void) {
     assert(tx_channel.running && rx_channel.running);
     assert(registers[0x0d] == 0x01 && registers[0x0e] == 0x02);
 }
+static void assert_released(void) {
+    assert(!s_initialized && !s_opened && !s_dev && !s_codec && !s_ctrl && !s_data && !s_gpio);
+    assert(!s_tx && !s_rx && !tx_channel.running && !rx_channel.running);
+    assert(!tx_data_enabled && !rx_data_enabled);
+    assert(ctrl_creations == ctrl_deletions);
+}
 
 int main(void) {
     fresh();
     bsp_audio_set_volume(43);
     assert(bsp_audio_set_format(16000, 16, 1) == ESP_OK);
     assert_active();
+    assert(bsp_audio_init_playback() == ESP_ERR_INVALID_STATE);
     unsigned created = codec_creations;
     assert(bsp_audio_set_format(16000, 16, 1) == ESP_OK);
     assert(codec_creations == created); // Same-format reuse remains cheap.
@@ -366,6 +388,68 @@ int main(void) {
     assert(bsp_audio_init() == ESP_OK);
     assert(bsp_audio_set_format(16000, 16, 1) == ESP_OK);
     assert_active();
+    // Playback-only mode never allocates RX, writes input gain or permits reads.
+    audio_cleanup();
+    unsigned rx_before = rx_allocations, gain_before = input_gain_calls;
+    fault(0x0d,0xfa,1);
+    assert(bsp_audio_init_playback() != ESP_OK);
+    assert(!s_initialized && !s_ctrl && !s_tx && !s_rx);
+    assert(bsp_audio_init_playback() == ESP_OK);
+    assert(bsp_audio_init_playback() == ESP_OK);
+    assert(bsp_audio_init() == ESP_ERR_INVALID_STATE);
+    assert(s_rx == NULL && !rx_requested && last_codec_mode == ESP_CODEC_DEV_WORK_MODE_DAC);
+    bsp_audio_set_volume(43);
+    uint8_t pcm[8] = {0};
+    for (unsigned i=0;i<20;i++) {
+        assert(bsp_audio_set_format(i%2 ? 44100 : 48000,16,1) == ESP_OK);
+        assert(s_opened && tx_channel.running && !rx_channel.running);
+        assert(bsp_audio_write(pcm,sizeof(pcm)) == ESP_OK);
+        assert(bsp_audio_read(pcm,sizeof(pcm)) == ESP_ERR_INVALID_STATE);
+        assert(bsp_audio_sleep() == ESP_OK);
+        assert(!tx_channel.running && s_rx == NULL);
+        assert(bsp_audio_wake() == ESP_OK);
+        assert(last_codec_mode == ESP_CODEC_DEV_WORK_MODE_DAC && registers[0x32] == 43);
+    }
+    fail_tx_fmt=1;
+    assert(bsp_audio_set_format(16000,16,1) != ESP_OK);
+    assert_rollback();
+    assert(bsp_audio_set_format(16000,16,1) == ESP_OK);
+    assert(bsp_audio_sleep() == ESP_OK);
+    fault(0x0d,0xfa,1);
+    assert(bsp_audio_wake() != ESP_OK);
+    assert_rollback();
+    assert(bsp_audio_wake() == ESP_OK);
+    assert(rx_allocations == rx_before && input_gain_calls == gain_before);
+    assert(bsp_audio_deinit() == ESP_OK);
+    assert_released();
+    assert(bsp_audio_deinit() == ESP_OK);
+    // App changes may alternate capture/playback ownership after full release.
+    for (unsigned i=0;i<20;i++) {
+        unsigned rx_count=rx_allocations;
+        assert((i%2 ? bsp_audio_init() : bsp_audio_init_playback()) == ESP_OK);
+        assert(rx_allocations == rx_count + (i%2));
+        assert(bsp_audio_set_format(44100,16,1) == ESP_OK);
+        assert(bsp_audio_deinit() == ESP_OK);
+        assert_released();
+    }
+    assert(bsp_audio_init_playback() == ESP_OK);
+    assert(bsp_audio_set_format(48000,16,1) == ESP_OK);
+    fault(0x0d,0xfc,2);
+    assert(bsp_audio_deinit() != ESP_OK);
+    assert(s_initialized && s_ctrl && s_tx); // Failed suspend retains handles for retry.
+    assert(bsp_audio_deinit() == ESP_OK);
+    assert_released();
+    assert(bsp_audio_init_playback() == ESP_OK);
+    fail_channel_delete=1;
+    assert(bsp_audio_deinit() == ESP_ERR_INVALID_STATE);
+    assert(s_tx && !s_initialized);
+    assert(bsp_audio_init_playback() == ESP_ERR_INVALID_STATE);
+    assert(bsp_audio_deinit() == ESP_OK);
+    assert_released();
+    fresh();
+    assert(bsp_audio_set_format(16000,16,1) == ESP_OK);
+    assert_active();
+
     // Failure to release a dependency reference is distinct from an I2C fault:
     // public delete has freed the object, so fail closed until reboot instead of
     // constructing against an uncertain reference count and reporting success.
@@ -374,7 +458,9 @@ int main(void) {
     assert(bsp_audio_wake() != ESP_OK);
     assert_rollback();
     assert(bsp_audio_init() == ESP_ERR_INVALID_STATE);
-    audio_cleanup();
+    assert(bsp_audio_deinit() == ESP_ERR_INVALID_STATE);
+    assert(s_codec_release_failed); // Releasing other resources cannot heal a stale reference.
+    assert(!s_ctrl && !s_tx && !s_rx);
     assert(ctrl_creations == ctrl_deletions);
     puts("BSP audio failure/retry/sleep/wake tests: PASS");
     return 0;

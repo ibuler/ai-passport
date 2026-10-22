@@ -220,6 +220,8 @@ MCU 是 I2S master，ES8311 是 slave；I2S0 的 TX/RX 全双工通道共享 MCL
 - `no_dac_ref=true` 对单声道麦克风录音是必要的；改为 false 会让读入通道成为 DAC reference，表现为录音恒零。
 - 麦克风模拟输入增益当前为 30 dB；输出音量 API 为 0–100%。增益和音量不是同一个概念。
 - `bsp_audio_read/write` 是阻塞调用，不能放在按键回调或 LVGL 任务中。
+- 录放音应用调用 `bsp_audio_init()`，仅播放应用可调用 `bsp_audio_init_playback()`，省去 RX 通道 / DMA 和 ADC 设置；仅播放模式读音频返回 `ESP_ERR_INVALID_STATE`。首次初始化前选择模式，初始化后到成功释放前，切换模式返回 `ESP_ERR_INVALID_STATE`；休眠 / 唤醒保留所选模式。
+- 调用 `bsp_audio_deinit()` 前停止 PCM 读写并串行化音频生命周期操作。它休眠 codec 后释放 codec 接口、I2S 通道和 DMA，保留共用 I2C 总线。成功释放后重复调用幂等，并可重新选择任一初始化模式；休眠 / 通道释放失败保留句柄供显式重试，codec 引用释放失败仍需重启。休眠 / 唤醒会保留通道，不能代替资源释放。
 - I2S DMA 当前为 6 个 descriptor、每个 240 frame。更改 DMA 或 LVGL buffer 前必须联合评估内部 RAM。
 - 调用 `bsp_audio_sleep()` 前必须停止所有 PCM 读写。该接口通过已打开的控制接口直接执行完整 ES8311 suspend 寄存器序列，不依赖 codec-device opened 标志，因此开机后从未播放也不需无声 open。它会回读 `0x00`、`0x01`、`0x0D`、`0x0E`、`0x12` 和 `0x45`，失败后等待 5 ms 重试一次完整序列，并即使音频从未打开也显式停止两条 I2S channel。
 - light sleep 返回后调用 `bsp_audio_wake()`，以休眠前格式重新打开 codec/I2S 通路。两个接口均为幂等操作；音频子系统不可用时视为无需暂停或恢复。deep sleep 唤醒会重启，改由正常 `bsp_audio_init()` 流程初始化。

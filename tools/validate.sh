@@ -48,6 +48,33 @@ run_static_checks() {
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/pocket/test_model.c main/pocket/model.c -o "${test_dir}/test_pocket"
     "${test_dir}/test_pocket"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+        -Itests/pocket/runtime_stubs -Imain \
+        tests/pocket/test_player_runtime.c main/pocket/model.c -o "${test_dir}/test_pocket_player"
+    "${test_dir}/test_pocket_player"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/pocket/test_xiaozhi_model.c main/pocket/xiaozhi_model.c -o "${test_dir}/test_xiaozhi_model"
+    "${test_dir}/test_xiaozhi_model"
+    if [[ -f "${IDF_PATH:-}/components/json/cJSON/cJSON.c" ]]; then
+        "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain -I"${IDF_PATH}/components/json/cJSON" \
+            tests/pocket/test_xiaozhi_protocol.c main/pocket/xiaozhi_protocol.c main/pocket/model.c \
+            "${IDF_PATH}/components/json/cJSON/cJSON.c" -lm -o "${test_dir}/test_xiaozhi_protocol"
+        "${test_dir}/test_xiaozhi_protocol"
+        "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+            -Itests/pocket/voice_runtime_stubs -Itests/pocket/runtime_stubs -Imain \
+            -I"${IDF_PATH}/components/json/cJSON" tests/pocket/test_xiaozhi_runtime.c \
+            main/pocket/xiaozhi_protocol.c main/pocket/xiaozhi_model.c main/pocket/model.c \
+            "${IDF_PATH}/components/json/cJSON/cJSON.c" -lm -o "${test_dir}/test_xiaozhi_runtime"
+        "${test_dir}/test_xiaozhi_runtime"
+        "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+            -Itests/pocket/voice_runtime_stubs -Itests/pocket/runtime_stubs -Imain \
+            -I"${IDF_PATH}/components/json/cJSON" tests/pocket/test_feeds_runtime.c \
+            main/pocket/model.c main/pocket/github.c \
+            "${IDF_PATH}/components/json/cJSON/cJSON.c" -lm -o "${test_dir}/test_feeds_runtime"
+        "${test_dir}/test_feeds_runtime"
+    else
+        echo "XiaoZhi JSON/runtime host tests: NOT RUN (activate ESP-IDF for its pinned cJSON source)"
+    fi
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/pocket/test_github.c main/pocket/github.c -o "${test_dir}/test_github"
     "${test_dir}/test_github"

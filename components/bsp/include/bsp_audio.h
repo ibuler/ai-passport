@@ -10,6 +10,18 @@
 // 失败会释放本次已创建的 codec 接口和 I2S channel，修正故障后可重试。
 esp_err_t bsp_audio_init(void);
 
+// Playback-only applications may omit the microphone/RX channel and its DMA.
+// Choose this or full-duplex init before first use; changing modes after a
+// successful init returns ESP_ERR_INVALID_STATE until deinit completes.
+// Sleep/wake retains the mode.
+esp_err_t bsp_audio_init_playback(void);
+
+// Stop PCM I/O first. Suspend the codec, then release audio-owned interfaces,
+// I2S channels and DMA; the shared I2C bus remains available. Idempotent after
+// success. A failed suspend can be retried; failed codec reference release
+// still requires reboot. A later initialization may choose either mode.
+esp_err_t bsp_audio_deinit(void);
+
 // 设置采样格式。同格式重复调用是廉价的(直接复用已打开的 codec)。
 //
 // ⚠ 这里有个必须绕开的坑:esp_codec_dev_open() 在 codec【已打开】时会直接返回 OK 且

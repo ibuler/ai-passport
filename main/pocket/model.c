@@ -39,6 +39,20 @@ bool pf_text_valid(const char *text, size_t capacity, bool allow_empty)
     return true;
 }
 
+void pf_notice_text(char *out, size_t capacity, const char *text)
+{
+    if (!out || !capacity) return;
+    if (!text || !pf_text_valid(text, strlen(text) + 1, true)) { out[0] = 0; return; }
+    size_t used = 0;
+    for (unsigned count = 0; *text && count < PF_NOTICE_CHARS; count++) {
+        unsigned char c = (unsigned char)*text;
+        size_t bytes = c < 0x80 ? 1 : c < 0xe0 ? 2 : c < 0xf0 ? 3 : 4;
+        if (used + bytes >= capacity) break;
+        memmove(out + used, text, bytes); used += bytes; text += bytes;
+    }
+    out[used] = 0;
+}
+
 bool pf_url_valid(const char *url)
 {
     if (!pf_text_valid(url, PF_URL, false)) return false;
@@ -73,6 +87,13 @@ uint8_t pf_volume_step(uint8_t current, int direction)
 {
     int next = (current > 100 ? 100 : current) + (direction > 0 ? 5 : direction < 0 ? -5 : 0);
     return next < 0 ? 0 : next > 100 ? 100 : next;
+}
+
+bool pf_playlist_advance(pf_page_t page, const pf_playback_t *play, unsigned count, unsigned *next)
+{
+    if (page != PF_PLAYER || play->state != PF_FINISHED || !count || count > PF_TRACKS || play->track >= count) return false;
+    *next = pf_track_step(play->track, 1, count);
+    return true;
 }
 
 uint32_t pf_crc32(uint32_t crc, const void *data, size_t length)

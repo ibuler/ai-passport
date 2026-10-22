@@ -44,6 +44,8 @@ Store reusable source images and generated display assets in `images/`.
 - Preserve editable sources where licensing permits, and record the source and license.
 - Never commit device QR secrets, credentials, or personal data in images.
 
+The XiaoZhi app uses [`images/furina/furina-sheet-soft.png`](images/furina/furina-sheet-soft.png), an alpha-background and soft lower-silhouette edit of [`furina-sheet.png`](images/furina/furina-sheet.png), a 1254×1254, 3×3 expression sheet generated with the built-in image tool on 2026-10-22 for the user's Furina selection. This is generated fan art; the Genshin Impact character design belongs to HoYoverse, and no blanket redistribution license is asserted. The final prompt, frame order, conversion and hashes are in [`images/furina/metadata.json`](images/furina/metadata.json). [`images/furina/furina.rgb565a8`](images/furina/furina.rgb565a8) stores nine 128×128 RGB565A8 frames (442,368 bytes; color plane followed by alpha plane per frame), embedded in application Flash and referenced directly by LVGL without allocating full frames. `tools/pocket/embed_portrait.py` supplies the same bytes to the native renderer. These are application assets and do not replace the user's uploaded home image.
+
 ## Music and sound effects
 
 Store reusable music and sound-effect sources in `music/`.

@@ -21,7 +21,8 @@ typedef struct {
     pf_track_t tracks[PF_TRACKS];
 } pf_config_t;
 typedef struct { uint16_t frames, flags; uint32_t crc; } pf_image_info_t;
-typedef enum { PF_HOME, PF_LAUNCHER, PF_PLAYER, PF_RADIO, PF_WEATHER, PF_FOCUS, PF_STOPWATCH, PF_SETTINGS } pf_page_t;
+typedef enum { PF_HOME, PF_LAUNCHER, PF_PLAYER, PF_RADIO, PF_WEATHER, PF_FOCUS, PF_STOPWATCH, PF_SETTINGS, PF_XIAOZHI } pf_page_t;
+#define PF_APP_COUNT 7
 typedef enum { PF_IDLE, PF_CONNECTING, PF_PLAYING, PF_PAUSED, PF_FINISHED, PF_ERROR } pf_play_state_t;
 typedef struct {
     pf_play_state_t state;
@@ -32,10 +33,14 @@ typedef struct {
 } pf_playback_t;
 
 void pf_defaults(pf_config_t *config);
+#define PF_NOTICE_CHARS 12
+/* Copy a single-line notice, counting UTF-8 characters including punctuation. */
+void pf_notice_text(char *out, size_t capacity, const char *text);
 bool pf_text_valid(const char *text, size_t capacity, bool allow_empty);
 bool pf_url_valid(const char *url);
 bool pf_config_valid(const pf_config_t *config);
 unsigned pf_track_step(unsigned current, int direction, unsigned count);
+bool pf_playlist_advance(pf_page_t page, const pf_playback_t *play, unsigned count, unsigned *next);
 uint8_t pf_volume_step(uint8_t current, int direction);
 uint32_t pf_crc32(uint32_t crc, const void *data, size_t length);
 bool pf_image_header(const uint8_t header[16], size_t bytes, pf_image_info_t *info);

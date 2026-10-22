@@ -1,6 +1,7 @@
 #pragma once
 #include "esp_codec_dev_defaults.h"
 #define ESP_CODEC_DEV_WORK_MODE_BOTH 3
+#define ESP_CODEC_DEV_WORK_MODE_DAC 2
 typedef struct {
     const audio_codec_ctrl_if_t *ctrl_if;
     const audio_codec_gpio_if_t *gpio_if;

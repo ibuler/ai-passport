@@ -162,9 +162,11 @@ Troubleshoot in order: bus-init log, scan results for `0x18`/`0x63`, power/groun
 
 The MCU is I2S master and the ES8311 is slave. I2S0 TX/RX shares MCLK GPIO6, BCLK GPIO5, and WS GPIO3; DOUT is GPIO2 and DIN is GPIO4. The demo opens 16 kHz, 16-bit, mono PCM over a physically two-slot standard-I2S bus.
 
+- Choose `bsp_audio_init()` for full-duplex capture/playback, or `bsp_audio_init_playback()` for output-only applications. Playback-only mode omits RX/channel DMA and ADC setup; reads return `ESP_ERR_INVALID_STATE`. Choose once before first initialization: attempting to change modes before successful deinitialization returns `ESP_ERR_INVALID_STATE`; sleep/wake retains the chosen mode.
 - Call `bsp_audio_set_format()` before PCM I/O.
 - A format change must close and reopen `esp_codec_dev`; an already open device is not reconfigured.
 - Preserve the I2S enable/disable sequence around close/open.
+- Stop PCM I/O and serialize audio lifecycle calls before `bsp_audio_deinit()`. It suspends the codec and releases codec interfaces, I2S channels and DMA, retaining the shared I2C bus. Successful deinitialization is idempotent and permits choosing either initialization mode again. Suspend/channel-release failures retain handles for an explicit retry; a failed codec-reference release still requires reboot. Sleep/wake intentionally retains channels and is not a substitute for resource release.
 - Track underlying I2C and I2S configuration errors even when codec-dev drops their return values. Failed opens and format changes release codec objects, force suspend and stop I2S; retries recreate the codec instead of reusing partial opened/enabled state. Sleep also releases codec objects before the final forced register sequence; wake recreates them and restores format and volume while retaining the shared bus and channels. A failed codec-reference release requires reboot rather than a false successful recovery. Repeated sleep calls retain an earlier failure result until recovery.
 - Do not write ES8311 clock-divider registers after open; the driver derives them from sample rate and 256×fs MCLK.
 - Keep `no_dac_ref=true` for mono microphone input; false can produce all-zero capture.

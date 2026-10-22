@@ -5,6 +5,15 @@
 #include <string.h>
 int main(int argc, char **argv)
 {
+    char notice[49];
+    pf_notice_text(notice,sizeof(notice),"网络连接失败，请重试！多余");
+    assert(!strcmp(notice,"网络连接失败，请重试！多"));
+    pf_notice_text(notice,sizeof(notice),"12345678901!extra");assert(!strcmp(notice,"12345678901!"));
+    pf_notice_text(notice,7,"中文字符");assert(!strcmp(notice,"中文"));
+    pf_notice_text(notice,sizeof(notice),"😀12345678901tail");assert(!strcmp(notice,"😀12345678901"));
+    pf_notice_text(notice,sizeof(notice),"bad\xff");assert(!notice[0]);
+    pf_notice_text(notice,sizeof(notice),"line\nbreak");assert(!notice[0]);
+    pf_notice_text(notice,sizeof(notice),NULL);assert(!notice[0]);
     pf_profile_t p; pf_profile_defaults(&p); assert(pf_profile_valid(&p));
     p.latitude_e4=900001; assert(!pf_profile_valid(&p)); p.latitude_e4=0;
     p.longitude_e4=-1800001; assert(!pf_profile_valid(&p)); p.longitude_e4=0;
@@ -56,6 +65,20 @@ int main(int argc, char **argv)
     for (unsigned i = 0; i < sizeof(bad)/sizeof(bad[0]); i++) assert(!pf_url_valid(bad[i]));
     assert(pf_track_step(0,-1,8)==7 && pf_track_step(7,1,8)==0);
     assert(pf_track_step(9,-1,0)==0 && pf_track_step(99,1,2)==1);
+    pf_playback_t play={.state=PF_FINISHED,.track=0}; unsigned next=99;
+    assert(pf_playlist_advance(PF_PLAYER,&play,4,&next) && next==1);
+    play.track=3; assert(pf_playlist_advance(PF_PLAYER,&play,4,&next) && next==0);
+    play.track=0; assert(pf_playlist_advance(PF_PLAYER,&play,1,&next) && next==0);
+    for (unsigned page=PF_HOME;page<=PF_SETTINGS;page++) if (page!=PF_PLAYER)
+        assert(!pf_playlist_advance(page,&play,4,&next));
+    for (unsigned state=PF_IDLE;state<=PF_ERROR;state++) if (state!=PF_FINISHED) {
+        play.state=state; next=99;
+        assert(!pf_playlist_advance(PF_PLAYER,&play,4,&next) && next==99);
+    }
+    play.state=PF_FINISHED;
+    assert(!pf_playlist_advance(PF_PLAYER,&play,0,&next));
+    assert(!pf_playlist_advance(PF_PLAYER,&play,PF_TRACKS+1,&next));
+    play.track=4; assert(!pf_playlist_advance(PF_PLAYER,&play,4,&next));
     assert(pf_crc32(0,"123456789",9)==0xcbf43926);
     uint32_t crc=pf_crc32(0,"1234",4); assert(pf_crc32(crc,"56789",5)==0xcbf43926);
     uint8_t h[16]={'P','F','I','1',96,0,96,0,1,0,1,0,0,0,0,0};

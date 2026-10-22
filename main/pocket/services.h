@@ -4,6 +4,7 @@
 
 esp_err_t pf_store_init(void);
 void pf_config_get(pf_config_t *out);
+bool pf_music_url(unsigned track, char out[PF_URL]);
 esp_err_t pf_config_save(const pf_config_t *config);
 uint8_t pf_volume_get(void);
 esp_err_t pf_volume_adjust(int direction);
@@ -19,6 +20,8 @@ const char *pf_ap_name(void);
 const char *pf_ap_password(void);
 
 esp_err_t pf_player_init(void);
+/* One controller serializes start/stop. Playback task is created on demand;
+ * stop waits for cleanup and releases it before another app/track is opened. */
 esp_err_t pf_player_start(unsigned track);
 esp_err_t pf_player_stop(void);
 void pf_player_pause(void);
@@ -31,6 +34,9 @@ bool pf_http_take(uint32_t wait_ms);
 void pf_http_give(void);
 bool pf_settings_active(void);
 esp_err_t pf_weather_init(void);
+/* Controller-only: cooperative stop/recreate; cached results and requests survive. */
+esp_err_t pf_feeds_pause(void);
+esp_err_t pf_feeds_resume(void);
 void pf_weather_refresh(void);
 void pf_weather_snapshot(pf_weather_t *out);
 

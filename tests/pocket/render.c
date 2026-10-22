@@ -41,6 +41,14 @@ static void check_sources(const char *path)
     }
     fclose(f); assert(!missing);
 }
+static lv_obj_t *find_label(lv_obj_t *obj,const char *text)
+{
+    if(lv_obj_check_type(obj,&lv_label_class) && !strcmp(lv_label_get_text(obj),text))return obj;
+    for(unsigned i=0;i<lv_obj_get_child_count(obj);i++) {
+        lv_obj_t *found=find_label(lv_obj_get_child(obj,i),text);if(found)return found;
+    }
+    return NULL;
+}
 static bool contains(lv_obj_t *obj, const char *text)
 {
     if (lv_obj_check_type(obj, &lv_label_class) && !strcmp(lv_label_get_text(obj), text)) return true;
@@ -75,14 +83,37 @@ int main(int argc,char **argv)
         fclose(f);assert(pf_github_parser_finish(&parser,&github));
     }
     pf_playback_t play={.state=PF_PLAYING,.seconds=721,.volume=35};
-    static const char *names[] = {"home", "launcher", "player", "radio", "weather", "focus", "stopwatch", "settings"};
-    for(unsigned cycle=0;cycle<12;cycle++) for(unsigned page=PF_HOME; page<=PF_SETTINGS; page++) {
+    static const char *names[] = {"home", "launcher", "player", "radio", "weather", "focus", "stopwatch", "settings", "xiaozhi"};
+    for(unsigned cycle=0;cycle<12;cycle++) for(unsigned page=PF_HOME; page<=PF_XIAOZHI; page++) {
         pf_ui_show(page,&config,&profile,0,"Pocket-Focus-1234","12345678");
         pf_ui_update(&play,true,85,1200);
-        pf_ui_details(&profile,&weather,1792597800,1200,&focus,25,&stopwatch,cycle%6);
+        if (page==PF_PLAYER) assert(contains(lv_screen_active(),"列表循环播放"));
+        pf_ui_details(&profile,&weather,1792597800,1200,&focus,25,&stopwatch,cycle%PF_APP_COUNT);
         pf_ui_github(&github);
         if(!cycle) { char name[80]; snprintf(name,sizeof(name),"build/%s",names[page]); save(name); }
     }
+    pf_xz_snapshot_t xz={.state=PF_XZ_READY};
+    for(unsigned frame=0;frame<9;frame++) {
+        xz.state=frame==2?PF_XZ_LISTENING:frame==3?PF_XZ_THINKING:frame==4||frame==5?PF_XZ_SPEAKING:PF_XZ_READY;
+        xz.emotion=frame==6?PF_XZ_HAPPY:frame==7?PF_XZ_SAD:frame==8?PF_XZ_SURPRISED:PF_XZ_NEUTRAL;
+        strcpy(xz.message,frame==2?"正在听，请直接说话":frame==3?"让我想一想":frame==4||frame==5?"正在回答":"");
+        strcpy(xz.text,frame==4||frame==5?"今天想聊点什么？":"");
+        unsigned tick=frame==1?3900:frame==5?1260:1200;xz.pcm_at=tick;
+        assert(pf_xz_portrait(&xz,tick)==frame);
+        pf_ui_xiaozhi(&xz,tick,frame%2?100:0);
+        assert(contains(lv_screen_active(),"小智"));
+        assert(!contains(lv_screen_active(),"芙宁娜") && !contains(lv_screen_active(),"确定键开始语音对话"));
+        char name[80];snprintf(name,sizeof(name),"build/furina-%u",frame);save(name);
+    }
+    xz.state=PF_XZ_ERROR;strcpy(xz.text,"今天想聊点什么？");strcpy(xz.message,"网络连接失败，请重试！多余");
+    pf_ui_xiaozhi(&xz,1200,35);assert(contains(lv_screen_active(),"网络连接失败，请重试！多"));
+    lv_obj_update_layout(lv_screen_active());
+    assert(lv_obj_get_y(find_label(lv_screen_active(),"网络连接失败，请重试！多"))>=230);
+    assert(!contains(lv_screen_active(),"今天想聊点什么？"));
+    save("build/xiaozhi-short-error");
+    strcpy(xz.message,"录音启动失败，请重试");pf_ui_xiaozhi(&xz,1200,35);save("build/xiaozhi-error-below");
+    xz.state=PF_XZ_ACTIVATING;strcpy(xz.code,"123456");strcpy(xz.message,"到 xiaozhi.me 添加设备");
+    pf_ui_xiaozhi(&xz,1200,35);assert(contains(lv_screen_active(),"123456"));save("build/xiaozhi-activation");
     pf_ui_show(PF_HOME,&config,&profile,0,"test","12345678");
     memset(&weather,0,sizeof(weather));
     pf_ui_update(&play,false,-1,1200); pf_ui_details(&profile,&weather,0,1200,&focus,25,&stopwatch,0);

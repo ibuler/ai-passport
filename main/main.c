@@ -1,5 +1,6 @@
 #include "pocket/services.h"
 #include "pocket/ui.h"
+#include "pocket/xiaozhi.h"
 #include "bsp_i2c.h"
 #include "bsp_display.h"
 #include "bsp_button.h"
@@ -20,7 +21,7 @@ static pf_profile_t s_profile;
 static unsigned s_radio_revision;
 static pf_timer_t s_focus, s_stopwatch;
 static unsigned s_minutes = 25, s_selection;
-static const pf_page_t s_apps[] = {PF_PLAYER, PF_RADIO, PF_WEATHER, PF_FOCUS, PF_STOPWATCH, PF_SETTINGS};
+static const pf_page_t s_apps[] = {PF_XIAOZHI, PF_PLAYER, PF_RADIO, PF_WEATHER, PF_FOCUS, PF_STOPWATCH, PF_SETTINGS};
 static pf_page_t s_page = PF_HOME;
 static unsigned s_track;
 static key_guard_t s_key_guard;
@@ -54,6 +55,7 @@ static void message(const char *text)
 static void open_settings(void)
 {
     if (pf_player_stop() != ESP_OK) { message("正在停止播放，请重试"); return; }
+    if (pf_xz_stop() != ESP_OK) { message("正在停止小智，请重试"); return; }
     if (bsp_lvgl_lock(1000)) { pf_ui_image_close(); bsp_lvgl_unlock(); }
     if (pf_settings_start() == ESP_OK) show(PF_SETTINGS);
     else { show(PF_HOME); message("设置服务启动失败"); }
@@ -68,29 +70,35 @@ static void handle(input_t value)
         }
         return;
     }
-    if (value.event == BSP_BTN_LONG && (s_page == PF_PLAYER || s_page == PF_RADIO) &&
+    if (value.event == BSP_BTN_LONG && (s_page == PF_PLAYER || s_page == PF_RADIO || s_page == PF_XIAOZHI) &&
         (value.button == BSP_BTN_UP || value.button == BSP_BTN_DOWN)) {
         if (pf_volume_adjust(value.button == BSP_BTN_UP ? 1 : -1) != ESP_OK) message("音量保存失败，请重试");
         return;
     }
     if (value.event == BSP_BTN_LONG && value.button == BSP_BTN_DOWN) { open_settings(); return; }
     if (value.event == BSP_BTN_LONG && value.button == BSP_BTN_OK) {
+        if (pf_xz_stop() != ESP_OK) { message("正在停止小智，请重试"); return; }
         if (pf_player_stop() != ESP_OK) { message("正在停止播放，请重试"); return; }
         show(s_page == PF_LAUNCHER ? PF_HOME : PF_LAUNCHER); return;
     }
     if (value.event != BSP_BTN_CLICK) return;
     if (s_page == PF_HOME) return;
     if (s_page == PF_LAUNCHER) {
-        if (value.button != BSP_BTN_OK) s_selection = pf_track_step(s_selection, value.button == BSP_BTN_UP ? -1 : 1, 6);
+        if (value.button != BSP_BTN_OK) s_selection = pf_track_step(s_selection, value.button == BSP_BTN_UP ? -1 : 1, PF_APP_COUNT);
         else if (s_apps[s_selection] == PF_SETTINGS) open_settings();
         else {
             s_track = 0; show(s_apps[s_selection]);
+            if (s_page == PF_XIAOZHI) pf_xz_enter();
             if (s_page == PF_RADIO) pf_radio_refresh();
             if (s_page == PF_WEATHER) pf_weather_refresh();
         }
         return;
     }
     uint64_t now = esp_timer_get_time() / 1000;
+    if (s_page == PF_XIAOZHI) {
+        if (value.button == BSP_BTN_OK) (void)pf_xz_toggle();
+        return;
+    }
     if (s_page == PF_FOCUS) {
         if (value.button == BSP_BTN_OK) {
             if (pf_timer_elapsed(&s_focus, now) >= (uint64_t)s_minutes * 60000) pf_timer_reset(&s_focus);
@@ -114,6 +122,7 @@ static void handle(input_t value)
         else if (s_page == PF_RADIO) pf_player_radio(s_track);
         else pf_player_start(s_track);
     } else if (s_config.count) {
+        if (pf_player_stop() != ESP_OK) { message("正在停止播放，请重试"); return; }
         s_track = pf_track_step(s_track, value.button == BSP_BTN_UP ? -1 : 1, s_config.count);
         show(s_page);
         if (s_page == PF_RADIO) pf_player_radio(s_track); else pf_player_start(s_track);
@@ -130,6 +139,7 @@ void app_main(void)
     (void)bsp_battery_init();
     ESP_ERROR_CHECK(pf_network_init());
     ESP_ERROR_CHECK(pf_player_init());
+    ESP_ERROR_CHECK(pf_xz_init());
     ESP_ERROR_CHECK(pf_weather_init());
     s_inputs = xQueueCreate(8, sizeof(input_t));
     if (!s_inputs) { ESP_LOGE("pocket", "input queue allocation failed"); return; }
@@ -156,8 +166,20 @@ void app_main(void)
         pf_github_t github; pf_github_snapshot(&github);
         if (!battery_at || (uint32_t)(ticks - battery_at) >= 30000) { battery_at = ticks; battery = bsp_battery_soc(); }
         pf_playback_t play; pf_player_snapshot(&play);
+        pf_xz_snapshot_t xiaozhi; pf_xz_snapshot(&xiaozhi);
+        unsigned next;
+        if (pf_playlist_advance(s_page, &play, s_config.count, &next)) {
+            if (pf_player_stop() == ESP_OK) {
+                ESP_LOGI("pocket", "Playlist advance: %u -> %u", play.track, next);
+                s_track = next;
+                show(PF_PLAYER);
+                pf_player_start(s_track);
+            } else message("正在停止播放，请重试");
+            pf_player_snapshot(&play);
+        }
         if (bsp_lvgl_lock(100)) {
             pf_ui_update(&play, pf_network_ready(), battery, ticks);
+            if (s_page == PF_XIAOZHI) pf_ui_xiaozhi(&xiaozhi, ticks, pf_volume_get());
             pf_ui_details(&s_profile, &weather, time(NULL), now, &s_focus, s_minutes, &s_stopwatch, s_selection);
             pf_ui_github(&github);
             bsp_lvgl_unlock();
