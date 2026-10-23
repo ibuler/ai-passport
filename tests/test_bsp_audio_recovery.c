@@ -86,7 +86,8 @@ int audio_codec_delete_gpio_if(const audio_codec_gpio_if_t *gpio) {
 }
 esp_err_t i2s_new_channel(const i2s_chan_config_t *cfg, i2s_chan_handle_t *tx,
                           i2s_chan_handle_t *rx) {
-    (void)cfg;
+    assert(cfg->dma_desc_num == 6);
+    assert(cfg->dma_frame_num == (rx ? 240 : 480));
     assert(tx);
     *tx = &tx_channel;
     rx_requested = rx != NULL;

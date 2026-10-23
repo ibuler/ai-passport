@@ -20,8 +20,10 @@ const char *pf_ap_name(void);
 const char *pf_ap_password(void);
 
 esp_err_t pf_player_init(void);
-/* One controller serializes start/stop. Playback task is created on demand;
- * stop waits for cleanup and releases it before another app/track is opened. */
+/* Controller-only, blocking: start pauses feeds (up to their stop timeout)
+ * before allocating playback tasks/FIFO; stop joins both tasks and releases
+ * audio before resuming feeds. Retry a failed stop before opening another app.
+ * Natural EOF retains the player/feed pause until explicit stop or advance. */
 esp_err_t pf_player_start(unsigned track);
 esp_err_t pf_player_stop(void);
 void pf_player_pause(void);

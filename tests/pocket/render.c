@@ -1,13 +1,32 @@
 #include "pocket/ui.h"
 #include "pocket/github.h"
+#include "pocket/portrait.h"
 #include "lvgl.h"
+#include "src/draw/lv_image_decoder_private.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 LV_FONT_DECLARE(pocket_font_16);
 static uint16_t s_frame[240*320];
-static uint16_t s_draw[240*40];
+static uint16_t s_draw[240*20];
+static void *s_owned_pixels;
+static unsigned s_pixel_allocations, s_pixel_frees;
+static bool s_fail_pixels;
+void *pf_ui_test_calloc(size_t count, size_t bytes)
+{
+    assert(!s_owned_pixels && count * bytes == 5784);
+    if(s_fail_pixels) return NULL;
+    s_owned_pixels = calloc(count, bytes); assert(s_owned_pixels);
+    s_pixel_allocations++; return s_owned_pixels;
+}
+void *pf_ui_test_malloc(size_t bytes) { return pf_ui_test_calloc(1, bytes); }
+void pf_ui_test_free(void *pixels)
+{
+    if(!pixels) return;
+    assert(pixels == s_owned_pixels);
+    free(pixels); s_owned_pixels = NULL; s_pixel_frees++;
+}
 static void flush(lv_display_t *display, const lv_area_t *area, uint8_t *pixels)
 {
     uint16_t *p=(uint16_t*)pixels;
@@ -55,6 +74,39 @@ static bool contains(lv_obj_t *obj, const char *text)
     for (unsigned i=0;i<lv_obj_get_child_count(obj);i++) if (contains(lv_obj_get_child(obj,i),text)) return true;
     return false;
 }
+static void check_portrait_decoder(void)
+{
+    lv_image_decoder_args_t args = {.no_cache = true};
+    for (unsigned i = 0; i < PF_PORTRAIT_COUNT; i++) {
+        lv_mem_monitor_t before, during, after;
+        lv_mem_monitor(&before);
+        lv_image_decoder_dsc_t dsc;
+        assert(lv_image_decoder_open(&dsc, &pf_portrait_frames[i], &args) == LV_RESULT_OK);
+        assert(!dsc.decoded); /* No full-frame allocation at open. */
+        lv_area_t full = {0, 0, PF_PORTRAIT_W - 1, PF_PORTRAIT_H - 1};
+        lv_area_t area = {LV_COORD_MIN, LV_COORD_MIN, LV_COORD_MIN, LV_COORD_MIN};
+        unsigned visible = 0;
+        for (unsigned y = 0; y < PF_PORTRAIT_H; y++) {
+            assert(lv_image_decoder_get_area(&dsc, &full, &area) == LV_RESULT_OK);
+            assert(area.y1 == (int)y && area.y2 == (int)y);
+            assert(dsc.decoded->header.w == PF_PORTRAIT_W && dsc.decoded->header.h == 1);
+            assert(dsc.decoded->data_size == PF_PORTRAIT_W * 4);
+            const lv_color32_t *pixels = (const lv_color32_t *)dsc.decoded->data;
+            for (unsigned x = 0; x < PF_PORTRAIT_W; x++) {
+                if (x == 0 || y == 0 || x == PF_PORTRAIT_W - 1 || y == PF_PORTRAIT_H - 1)
+                    assert(!pixels[x].alpha);
+                visible += pixels[x].alpha != 0;
+            }
+        }
+        assert(visible > 512);
+        lv_mem_monitor(&during);
+        assert(before.free_size - during.free_size < 1024);
+        lv_image_decoder_close(&dsc);
+        lv_mem_monitor(&after);
+        assert(after.free_size == before.free_size);
+    }
+    puts("Portrait decoder: PASS; nine transparent frames, one 512-byte row, <1 KiB transient pool use, no retained allocation");
+}
 int main(int argc,char **argv)
 {
     lv_init();
@@ -62,6 +114,7 @@ int main(int argc,char **argv)
     lv_display_set_color_format(display,LV_COLOR_FORMAT_RGB565);
     lv_display_set_buffers(display,s_draw,NULL,sizeof(s_draw),LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(display,flush);
+    check_portrait_decoder();
     assert(pf_ui_font_check());
     assert(argc>1);
     for(int i=1;i<argc;i++) check_sources(argv[i]);
@@ -86,6 +139,7 @@ int main(int argc,char **argv)
     static const char *names[] = {"home", "launcher", "player", "radio", "weather", "focus", "stopwatch", "settings", "xiaozhi"};
     for(unsigned cycle=0;cycle<12;cycle++) for(unsigned page=PF_HOME; page<=PF_XIAOZHI; page++) {
         pf_ui_show(page,&config,&profile,0,"Pocket-Focus-1234","12345678");
+        assert((s_owned_pixels != NULL) == (page == PF_HOME));
         pf_ui_update(&play,true,85,1200);
         if (page==PF_PLAYER) assert(contains(lv_screen_active(),"列表循环播放"));
         pf_ui_details(&profile,&weather,1792597800,1200,&focus,25,&stopwatch,cycle%PF_APP_COUNT);
@@ -103,7 +157,7 @@ int main(int argc,char **argv)
         pf_ui_xiaozhi(&xz,tick,frame%2?100:0);
         assert(contains(lv_screen_active(),"小智"));
         assert(!contains(lv_screen_active(),"芙宁娜") && !contains(lv_screen_active(),"确定键开始语音对话"));
-        char name[80];snprintf(name,sizeof(name),"build/furina-%u",frame);save(name);
+        char name[80];snprintf(name,sizeof(name),"build/huolinger-%u",frame);save(name);
     }
     xz.state=PF_XZ_ERROR;strcpy(xz.text,"今天想聊点什么？");strcpy(xz.message,"网络连接失败，请重试！多余");
     pf_ui_xiaozhi(&xz,1200,35);assert(contains(lv_screen_active(),"网络连接失败，请重试！多"));
@@ -161,6 +215,17 @@ int main(int argc,char **argv)
         pf_ui_details(&profile,&weather,1792597800,1200,&focus,25,&stopwatch,0);
         pf_ui_github(&github); lv_refr_now(NULL);
     }
+    /* An optional graph allocation failure keeps navigation usable; closing
+     * home assets is idempotent and no descriptor may use released pixels. */
+    s_fail_pixels = true;
+    pf_ui_show(PF_HOME,&config,&profile,0,"test","12345678");
+    assert(!s_owned_pixels); pf_ui_github(&github); lv_refr_now(NULL);
+    s_fail_pixels = false;
+    pf_ui_show(PF_HOME,&config,&profile,0,"test","12345678");
+    assert(s_owned_pixels); pf_ui_github(&github); lv_refr_now(NULL);
+    pf_ui_image_close(); pf_ui_image_close();
+    pf_ui_github(&github); lv_refr_now(NULL);
+    assert(!s_owned_pixels && s_pixel_allocations == s_pixel_frees);
     lv_mem_monitor_t mem; lv_mem_monitor(&mem);
     assert(mem.total_size <= LV_MEM_SIZE);
     assert(mem.max_used + 4096 <= mem.total_size);

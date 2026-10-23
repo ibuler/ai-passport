@@ -308,7 +308,9 @@ static esp_err_t audio_i2s_init(void) {
         .id = BSP_I2S_PORT,
         .role = I2S_ROLE_MASTER,
         .dma_desc_num = 6,
-        .dma_frame_num = 240,
+        // Output-only music at 48 kHz needs more than the former 30 ms
+        // queue budget. Keep capture DMA unchanged for the voice RAM budget.
+        .dma_frame_num = s_playback_only ? 480 : 240,
         .auto_clear_after_cb = true,
         .auto_clear_before_cb = false,
         .intr_priority = 0,

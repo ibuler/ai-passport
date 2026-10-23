@@ -1,4 +1,5 @@
 #include "services.h"
+#include "xiaozhi.h"
 #include "bsp_audio.h"
 #include "esp_audio_dec_default.h"
 #include "esp_audio_simple_dec.h"
@@ -7,10 +8,12 @@
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "freertos/event_groups.h"
+#include "freertos/stream_buffer.h"
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -26,6 +29,21 @@ static atomic_bool s_requested, s_paused, s_radio;
 static pf_playback_t s_status;
 static atomic_uint s_failed_bytes, s_failed_caps;
 #define WORKER_IDLE BIT0
+#define READER_DONE BIT1
+#define STREAM_BYTES 4096
+#define PREBUFFER_BYTES 3072
+#define READER_STACK_BYTES 6144
+#define CONNECT_TIMEOUT_MS 8000
+#define READ_TIMEOUT_MS 1800
+static bool s_feeds_paused;
+
+typedef struct {
+    esp_http_client_handle_t http;
+    StreamBufferHandle_t buffer;
+    unsigned generation;
+    atomic_bool stop;
+    atomic_int result; /* 0: reading, 1: complete EOF, -1: network error. */
+} stream_t;
 
 static void allocation_failed(size_t bytes, uint32_t caps, const char *function)
 {
@@ -54,11 +72,46 @@ static void heap_log(const char *stage)
         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
         (unsigned)uxTaskGetStackHighWaterMark(NULL));
 }
+/* Only this task reads HTTP/TLS after setup. The decoder consumes a bounded
+ * compressed stream independently, so socket delays need not interrupt I2S. */
+static void reader(void *arg)
+{
+    stream_t *s = arg;
+    uint8_t chunk[512];
+    while (!atomic_load(&s->stop) && !cancelled(s->generation)) {
+        if (atomic_load(&s_paused)) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }
+        int got = esp_http_client_read(s->http, (char *)chunk, sizeof(chunk));
+        if (got <= 0) {
+            bool complete = got == 0 && esp_http_client_is_complete_data_received(s->http);
+            atomic_store(&s->result, complete ? 1 : -1);
+            break;
+        }
+        size_t sent = 0;
+        while (sent < (size_t)got && !atomic_load(&s->stop) && !cancelled(s->generation)) {
+            sent += xStreamBufferSend(s->buffer, chunk + sent, got - sent, pdMS_TO_TICKS(50));
+        }
+    }
+    heap_log("HTTP reader stopped");
+    xEventGroupSetBits(s_events, READER_DONE);
+    vTaskSuspend(NULL);
+}
+static bool prebuffer(stream_t *s)
+{
+    while (xStreamBufferBytesAvailable(s->buffer) < PREBUFFER_BYTES &&
+           !atomic_load(&s->result) && !cancelled(s->generation)) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    return !cancelled(s->generation);
+}
 static void play(unsigned generation, unsigned track, bool radio)
 {
     esp_http_client_handle_t http = NULL;
     esp_audio_simple_dec_handle_t decoder = NULL;
     uint8_t *input = NULL, *output = NULL;
+    TaskHandle_t network_task = NULL;
+    stream_t stream = {.generation = generation};
+    unsigned underruns = 0;
+    int64_t last_pcm_at = 0, max_gap_us = 0;
     char url[PF_URL];
     const char *error = NULL;
     uint8_t volume = 35;
@@ -89,7 +142,7 @@ static void play(unsigned generation, unsigned track, bool radio)
     if (cancelled(generation)) goto done;
     heap_log("before HTTP");
     esp_http_client_config_t cfg = {
-        .url = url, .timeout_ms = 1800, .buffer_size = 2048,
+        .url = url, .timeout_ms = CONNECT_TIMEOUT_MS, .buffer_size = 2048,
         .buffer_size_tx = 512, .crt_bundle_attach = esp_crt_bundle_attach,
         .max_redirection_count = 4, .user_agent = "PocketFocus/0.1",
     };
@@ -99,7 +152,15 @@ static void play(unsigned generation, unsigned track, bool radio)
     /* perform() owns redirect handling; open/read requires doing it explicitly. */
     for (unsigned redirects = 0;; redirects++) {
         if (cancelled(generation)) goto done;
-        if (esp_http_client_open(http, 0) != ESP_OK) { error = "连接失败，请检查音乐直链"; goto done; }
+        int64_t connect_at = esp_timer_get_time();
+        esp_err_t opened = esp_http_client_open(http, 0);
+        if (opened != ESP_OK) {
+            ESP_LOGW(TAG, "HTTP open failed: ret=%d elapsed_ms=%u", (int)opened,
+                (unsigned)((esp_timer_get_time() - connect_at) / 1000));
+            heap_log("HTTP connection failed");
+            error = "网络连接失败，请重试"; goto done;
+        }
+        if (cancelled(generation)) goto done;
         int64_t length = esp_http_client_fetch_headers(http);
         int code = esp_http_client_get_status_code(http);
         if (length < 0) { error = "服务器响应失败"; goto done; }
@@ -111,6 +172,11 @@ static void play(unsigned generation, unsigned track, bool radio)
         if (code != 200) { error = "音乐服务器拒绝请求"; goto done; }
         break;
     }
+    /* TCP/TLS establishment can take longer than a normal audio read. Keep
+     * streaming cancellation responsive after allowing the connection 8 s. */
+    if (esp_http_client_set_timeout_ms(http, READ_TIMEOUT_MS) != ESP_OK) {
+        error = "网络连接失败，请重试"; goto done;
+    }
     heap_log("after TLS");
     input = malloc(2048);
     output = malloc(4608);
@@ -120,26 +186,46 @@ static void play(unsigned generation, unsigned track, bool radio)
     if (bsp_audio_init_playback() != ESP_OK || bsp_audio_wake() != ESP_OK) { error = "音频硬件初始化失败"; goto done; }
     bsp_audio_set_volume(volume);
     heap_log("after decoder");
+    stream.http = http;
+    stream.buffer = xStreamBufferCreate(STREAM_BYTES, 1);
+    if (!stream.buffer) { error = "播放内存不足"; goto done; }
+    xEventGroupClearBits(s_events, READER_DONE);
+    if (xTaskCreate(reader, "pocket_stream", READER_STACK_BYTES, &stream, 4, &network_task) != pdPASS) {
+        error = "播放任务内存不足"; goto done;
+    }
+    if (!prebuffer(&stream)) goto done;
+    heap_log("stream prebuffered");
     uint32_t rate = 0;
     unsigned empty_output_bytes = 0;
     while (!cancelled(generation)) {
         while (atomic_load(&s_paused) && !cancelled(generation)) {
             status(PF_PAUSED, NULL);
+            last_pcm_at = 0; /* An intentional pause is not a feed stall. */
             vTaskDelay(pdMS_TO_TICKS(40));
         }
         if (cancelled(generation)) break;
-        int got = esp_http_client_read(http, (char *)input, 2048);
-        if (got < 0) { error = "网络中断，按确定键重试"; break; }
-        if (got == 0) {
-            finished = esp_http_client_is_complete_data_received(http);
-            if (!finished) error = "连接超时，按确定键重试";
-            break;
+        size_t got = xStreamBufferReceive(stream.buffer, input, 2048, pdMS_TO_TICKS(20));
+        if (!got) {
+            int result = atomic_load(&stream.result);
+            /* Recheck after observing EOF: the producer may have filled the
+             * ring between the timed receive and its final result store. */
+            if (xStreamBufferBytesAvailable(stream.buffer)) continue;
+            if (result) {
+                finished = result > 0;
+                if (!finished) error = "网络中断，按确定键重试";
+                break;
+            }
+            underruns++;
+            status(PF_CONNECTING, NULL);
+            if (!prebuffer(&stream)) break;
+            continue;
         }
         esp_audio_simple_dec_raw_t raw = {.buffer = input, .len = got,
-            .eos = esp_http_client_is_complete_data_received(http)};
+            .eos = atomic_load(&stream.result) == 1 && !xStreamBufferBytesAvailable(stream.buffer)};
         while (raw.len && !cancelled(generation)) {
             while (atomic_load(&s_paused) && !cancelled(generation)) {
                 status(PF_PAUSED, NULL);
+                last_pcm_at = 0;
                 vTaskDelay(pdMS_TO_TICKS(40));
             }
             if (cancelled(generation)) break;
@@ -171,7 +257,10 @@ static void play(unsigned generation, unsigned track, bool radio)
                     bsp_audio_set_volume(volume);
                     ESP_LOGI(TAG, "Volume applied: %u%%", (unsigned)volume);
                 }
+                int64_t pcm_at = esp_timer_get_time();
+                if (last_pcm_at && pcm_at - last_pcm_at > max_gap_us) max_gap_us = pcm_at - last_pcm_at;
                 if (bsp_audio_write(pcm, samples * 2) != ESP_OK) { error = "音频输出失败"; goto done; }
+                last_pcm_at = esp_timer_get_time();
                 if (!produced) {
                     ESP_LOGI(TAG, "MP3 PCM started: rate=%u source_channels=%u volume=%u",
                         (unsigned)rate, (unsigned)info.channel, (unsigned)volume);
@@ -189,9 +278,17 @@ static void play(unsigned generation, unsigned track, bool radio)
                 if (empty_output_bytes > 128 * 1024) { error = "音频数据无效或标签过大"; goto done; }
             }
         }
-        vTaskDelay(1);
     }
 done:
+    /* Acknowledge reader exit before freeing its stack context, HTTP or ring.
+     * A controller stop timeout must retain ownership until this completes. */
+    atomic_store(&stream.stop, true);
+    if (network_task) {
+        xEventGroupWaitBits(s_events, READER_DONE, false, true, portMAX_DELAY);
+        vTaskDelete(network_task);
+    }
+    if (stream.buffer) vStreamBufferDelete(stream.buffer);
+    ESP_LOGI(TAG, "Stream summary: underruns=%u max_feed_gap_ms=%u", underruns, (unsigned)(max_gap_us / 1000));
     if (http) esp_http_client_cleanup(http);
     if (decoder) esp_audio_simple_dec_close(decoder);
     free(input);
@@ -237,11 +334,14 @@ esp_err_t pf_player_init(void)
 static esp_err_t start(unsigned track, bool radio)
 {
     if (!s_lock || !s_events || track >= PF_TRACKS) return ESP_ERR_INVALID_STATE;
+    if (pf_feeds_pause() != ESP_OK) { status(PF_ERROR, "后台停止超时，请重试"); return ESP_ERR_TIMEOUT; }
+    s_feeds_paused = true;
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    if (!s_worker && xTaskCreate(worker, "pocket_audio", 10240, NULL, 4, &s_worker) != pdPASS) {
+    if (!s_worker && xTaskCreate(worker, "pocket_audio", 10240, NULL, 5, &s_worker) != pdPASS) {
         s_status = (pf_playback_t){.state = PF_ERROR, .track = track};
         strcpy(s_status.error, "播放任务内存不足");
         xSemaphoreGive(s_lock);
+        if (pf_feeds_resume() == ESP_OK) s_feeds_paused = false;
         return ESP_ERR_NO_MEM;
     }
     atomic_store(&s_track, track);
@@ -261,7 +361,14 @@ esp_err_t pf_player_radio(unsigned track) { return start(track, true); }
 esp_err_t pf_player_stop(void)
 {
     if (!s_lock || !s_events) return ESP_ERR_INVALID_STATE;
-    if (!s_worker) return ESP_OK; /* Another app may currently own the BSP. */
+    if (!s_worker) {
+        if (s_feeds_paused && !pf_xz_active()) {
+            esp_err_t result = pf_feeds_resume();
+            if (result == ESP_OK) s_feeds_paused = false;
+            return result;
+        }
+        return ESP_OK; /* Another app may currently own the BSP. */
+    }
     xSemaphoreTake(s_lock, portMAX_DELAY);
     atomic_store(&s_requested, false);
     atomic_fetch_add(&s_generation, 1);
@@ -285,7 +392,11 @@ esp_err_t pf_player_stop(void)
     ESP_LOGI(TAG, "Player resources released: heap=%u largest=%u",
         (unsigned)esp_get_free_heap_size(),
         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-    return ESP_OK;
+    if (s_feeds_paused && !pf_xz_active()) {
+        result = pf_feeds_resume();
+        if (result == ESP_OK) s_feeds_paused = false;
+    }
+    return result;
 }
 void pf_player_pause(void) { atomic_store(&s_paused, !atomic_load(&s_paused)); }
 void pf_player_snapshot(pf_playback_t *out)

@@ -31,7 +31,9 @@
 - 许可允许时保留可编辑源文件，并记录来源与许可。
 - 图片中不得包含设备二维码秘密、凭证或个人数据。
 
-小智应用使用 [`images/furina/furina-sheet-soft.png`](images/furina/furina-sheet-soft.png)，由原始 [`furina-sheet.png`](images/furina/furina-sheet.png) 编辑为透明背景并将下沿处理为弧形渐隐，为用户选择的芙宁娜于 2026-10-22 通过内置图像工具生成的 1254×1254、3×3 表情图集。它是生成的同人画，原神角色设计属于 HoYoverse，不声明统一再分发许可。最终提示词、帧顺序、转换方式和哈希记录在 [`images/furina/metadata.json`](images/furina/metadata.json)。[`images/furina/furina.rgb565a8`](images/furina/furina.rgb565a8) 保存九帧 128×128 RGB565A8（442,368 字节，每帧先颜色平面、后透明度平面），嵌入应用 Flash，由 LVGL 直接引用，不分配完整图像帧；`tools/pocket/embed_portrait.py` 为原生渲染提供相同字节。素材只用于小智应用，不替换用户上传的首页图片。
+小智现使用《完美世界》成年火灵儿：[`images/huolinger/huolinger-sheet.png`](images/huolinger/huolinger-sheet.png) 是 2026-10-23 通过内置图像工具生成的透明 3×3 表情图集。[`images/huolinger/huolinger.i4`](images/huolinger/huolinger.i4) 保存九帧 128×128 I4，每帧含 16 项 BGRA 调色板，**总计 74,304 字节**，比原来的 442,368 字节减少 83.2%。所有表情共用十五种不透明颜色及一个透明项，避免换帧时颜色跳变。[`images/huolinger/huolinger.png`](images/huolinger/huolinger.png) 预览实际打包像素。成年形象采用红金服饰、棕红长发和凤凰发饰，属于生成的同人画，并非官方素材；原角色权利归各权利方，不声明统一再分发许可。
+
+最终提示词、帧顺序、转换命令、视觉参考及哈希记录在 [`images/huolinger/metadata.json`](images/huolinger/metadata.json)。`tools/pocket/convert_portrait.py` 需要 Pillow，可从源图重现显示资源；`tools/pocket/embed_portrait.py` 为原生测试提供相同字节。LVGL 从 Flash 读取调色板及索引，每次只展开一行 512 字节 ARGB 像素，另有解码器管理及分配器开销，不使用完整帧缓冲或解压器。保持 `LV_BIN_DECODER_RAM_LOAD` 关闭；`main/pocket/portrait.c` 会拒绝不兼容配置。原芙宁娜素材及其 [`metadata.json`](images/furina/metadata.json) 保留作历史参考，不再嵌入固件。这些应用头像不替换用户上传的首页图片。
 
 ## 音乐与音效（music）
 

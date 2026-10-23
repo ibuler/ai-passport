@@ -119,7 +119,7 @@ be hidden behind an SDK helper that asserts or ignores task-creation results.
 - The vendor porch, power, and gamma sequence in `bsp_display.c` is panel-specific. Do not treat it as a universal ST7789 sequence.
 - `swap_bytes=true` is required because LVGL emits little-endian RGB565 while SPI sends the high byte first.
 
-The LVGL DMA buffer is one `240 × 20` RGB565 buffer, about 9.6 KB; the LVGL internal pool is 24 KB. Do not add large/double buffers without checking internal RAM, the largest contiguous heap block, and I2S DMA.
+The LVGL DMA buffer is one `240 × 20` RGB565 buffer, about 9.6 KB; the current application LVGL internal pool is 26 KiB. Do not add large/double buffers without checking internal RAM, the largest contiguous heap block, and I2S DMA.
 
 The final LVGL RGB565 flush is masked to a global 30 px radius, so the four areas outside the rounded screen remain pure black during page changes as well as normal rendering. The mask is applied directly to the partial draw buffer and does not use root-screen `clip_corner`; full-screen rounded clipping requires an ARGB intermediate layer that can exhaust the 24 KB LVGL pool on this no-PSRAM target. Keep this behavior in the display integration instead of duplicating corner decorations in individual pages.
 
@@ -172,7 +172,7 @@ The MCU is I2S master and the ES8311 is slave. I2S0 TX/RX shares MCLK GPIO6, BCL
 - Keep `no_dac_ref=true` for mono microphone input; false can produce all-zero capture.
 - Microphone analog gain is 30 dB; output volume is a separate 0–100% value.
 - `bsp_audio_read/write` block and must not run in button callbacks or the LVGL task.
-- I2S DMA uses six descriptors of 240 frames each.
+- I2S DMA uses six descriptors: 240 frames each for full-duplex capture, or 480 frames each for playback-only mode. At 48 kHz the latter holds at most 60 ms when full (5,760 bytes of mono 16-bit PCM); initial two-slot setup uses 11,520 bytes. Stop/release playback DMA before starting voice.
 - Stop every PCM reader and writer before calling `bsp_audio_sleep()`. It executes the complete ES8311 suspend register sequence directly through the already-open control interface, independently of the codec-device opened flag, so a boot that never played audio does not need a silent open. It reads back registers `0x00`, `0x01`, `0x0D`, `0x0E`, `0x12`, and `0x45`, retries the full sequence once after 5 ms, and explicitly disables both I2S channels even when audio was never opened.
 - Call `bsp_audio_wake()` after light sleep to reopen the saved format and restart the codec/I2S path. The calls are idempotent, and an unavailable audio subsystem is treated as having nothing to suspend or resume. Deep-sleep wake reboots and uses the normal `bsp_audio_init()` path instead.
 - REG0E is still written as `0xFF`, but readback verifies only bits 6:0 with mask `0x7F` and expected value `0x7F`. Both `0x7F` and `0xFF` pass; bit 7 reading as zero must not cause a false suspend failure. The other five registers retain full-byte checks. I2C errors or mismatched checked bits still fail after one retry: the Low Power demo aborts light sleep and attempts audio recovery, while deep sleep logs the error and continues its terminal shutdown.

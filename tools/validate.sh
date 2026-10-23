@@ -50,7 +50,7 @@ run_static_checks() {
     "${test_dir}/test_pocket"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
         -Itests/pocket/runtime_stubs -Imain \
-        tests/pocket/test_player_runtime.c main/pocket/model.c -o "${test_dir}/test_pocket_player"
+        tests/pocket/test_player_runtime.c main/pocket/model.c -pthread -o "${test_dir}/test_pocket_player"
     "${test_dir}/test_pocket_player"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/pocket/test_xiaozhi_model.c main/pocket/xiaozhi_model.c -o "${test_dir}/test_xiaozhi_model"

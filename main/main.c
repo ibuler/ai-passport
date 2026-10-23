@@ -77,8 +77,9 @@ static void handle(input_t value)
     }
     if (value.event == BSP_BTN_LONG && value.button == BSP_BTN_DOWN) { open_settings(); return; }
     if (value.event == BSP_BTN_LONG && value.button == BSP_BTN_OK) {
-        if (pf_xz_stop() != ESP_OK) { message("正在停止小智，请重试"); return; }
+        /* Release music before voice stop can recreate the background task. */
         if (pf_player_stop() != ESP_OK) { message("正在停止播放，请重试"); return; }
+        if (pf_xz_stop() != ESP_OK) { message("正在停止小智，请重试"); return; }
         show(s_page == PF_LAUNCHER ? PF_HOME : PF_LAUNCHER); return;
     }
     if (value.event != BSP_BTN_CLICK) return;

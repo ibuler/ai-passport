@@ -1,0 +1,37 @@
+{
+  "created": "2026-10-23",
+  "generator": "built-in image_gen",
+  "prompt": "Use case: stylized-concept. Asset type: production 3x3 expression spritesheet for a tiny 240x320 embedded voice assistant. Primary request: replace the current character with ADULT Huo Ling'er (\u706b\u7075\u513f), from Perfect World (\u5b8c\u7f8e\u4e16\u754c), recognizable adult donghua heroine, NOT a child, NOT chibi. Design: elegant mature Chinese fantasy woman with long dark auburn/chestnut hair with warm red highlights, recognizable small gold phoenix/flame hair ornaments with red accents, red and gold high-collared fantasy hanfu, warm brown expressive eyes, gentle confident presence. Front-facing head-and-upper-shoulders close portrait, modest clothing, large readable mature facial features. Style: polished simplified Chinese animation character illustration, clean strong silhouette, flat cel shading with a deliberately very limited 12\u201315-color warm palette, crisp dark outlines, minimal texture so it stays clear at ONLY 64x64 pixels per portrait. Composition: EXACT even 3 columns by 3 rows of nine equal square cells filling a square sheet. Same adult character, same head size, same head/shoulder positions, same hair silhouette and body in EVERY cell. Only eyes, brows and mouth change. Transparent empty space around every head and shoulder cutout; rounded gently tapered lower bust edge, never a rectangular crop. No background panels, no text, no labels, no cell borders, no watermark, no other objects. Keep each portrait within its cell with a small safe margin. Row-major expression order: 1 neutral gentle closed-mouth smile; 2 blink both eyes closed mouth closed; 3 attentive listening eyes open mouth closed; 4 thoughtful eyes looking slightly upward mouth closed; 5 speaking small open mouth; 6 speaking larger open mouth; 7 happy smiling eyes crescent; 8 concerned gentle sad eyes closed mouth; 9 pleasantly surprised eyes wider and small O-shaped mouth. Preserve same adult identity and exact placement across the 9 frames. Genuine alpha transparency throughout the sheet background.",
+  "subject": "Adult Huo Ling'er from Perfect World; generated fan art, not official artwork",
+  "source_dimensions": [
+    1254,
+    1254
+  ],
+  "frame_dimensions": [
+    128,
+    128
+  ],
+  "frames": [
+    "neutral",
+    "blink",
+    "listening",
+    "thinking",
+    "talk_small",
+    "talk_large",
+    "happy",
+    "sad",
+    "surprised"
+  ],
+  "format": "LVGL I4; per frame 16 little-endian BGRA palette entries, then high-nibble-first 4-bit pixels; palette entry 0 transparent",
+  "display_bytes": 74304,
+  "runtime_full_frame_heap_bytes": 0,
+  "runtime_decode_row_bytes": 512,
+  "conversion": "python3 tools/pocket/convert_portrait.py assets/images/huolinger/huolinger-sheet.png assets/images/huolinger/huolinger.i4 (requires Pillow); 120x120 content with 4-pixel transparent margins; shared 15-color opaque palette; alpha threshold 128",
+  "visual_reference_url": "https://www.sohu.com/na/492567839_486812",
+  "license_note": "Generated fan art for the user-selected character. Underlying Perfect World character rights remain with their respective owners; no blanket redistribution license is asserted.",
+  "files": {
+    "huolinger-sheet.png": "96474184caa6ac59c33818158a2fe84f01846727eca7de0f9ea0b94af78c3229",
+    "huolinger.i4": "72e3f865b5a9836b7c642670f8106b1e4bf20aa677f34ba5841e26af191792ee",
+    "huolinger.png": "20fda850548addbed62395daa102cb3e688dd5a9e1244d36484a633b26d123c8"
+  }
+}

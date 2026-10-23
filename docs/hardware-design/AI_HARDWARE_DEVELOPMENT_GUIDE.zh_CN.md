@@ -141,7 +141,7 @@ Wi-Fi、NimBLE 和 light/deep sleep 直接使用 ESP-IDF API，不属于板级 B
 
 ### 5.2 LVGL 内存和线程规则
 
-ESP32-C3 无 PSRAM。当前 LVGL 显示缓冲为 `240 × 20` 像素的单 DMA 缓冲，RGB565 约 9.6 KB；`sdkconfig.defaults` 的 LVGL 内部池为 24 KB。不要直接改为大行数双缓冲，也不要扩大 UI 内存池而不检查内部 RAM、最大连续堆和 I2S DMA 初始化。
+ESP32-C3 无 PSRAM。当前 LVGL 显示缓冲为 `240 × 20` 像素的单 DMA 缓冲，RGB565 约 9.6 KB；当前应用在 `sdkconfig.defaults` 中配置的 LVGL 内部池为 26 KiB。不要直接改为大行数双缓冲，也不要扩大 UI 内存池而不检查内部 RAM、最大连续堆和 I2S DMA 初始化。
 
 LVGL 最终输出的 RGB565 刷新区域会统一套用 30 px 圆角遮罩，因此正常刷新和页面切换期间，圆角之外的四角区域都会保持纯黑。遮罩直接作用于局部绘制缓冲，不使用根 screen 的 `clip_corner`；全屏圆角裁剪需要 ARGB 中间图层，在本项目无 PSRAM、LVGL 内存池仅 24 KB 的条件下可能耗尽内存。该行为统一放在显示接入层，不应在各页面重复绘制四角装饰。
 
@@ -222,7 +222,7 @@ MCU 是 I2S master，ES8311 是 slave；I2S0 的 TX/RX 全双工通道共享 MCL
 - `bsp_audio_read/write` 是阻塞调用，不能放在按键回调或 LVGL 任务中。
 - 录放音应用调用 `bsp_audio_init()`，仅播放应用可调用 `bsp_audio_init_playback()`，省去 RX 通道 / DMA 和 ADC 设置；仅播放模式读音频返回 `ESP_ERR_INVALID_STATE`。首次初始化前选择模式，初始化后到成功释放前，切换模式返回 `ESP_ERR_INVALID_STATE`；休眠 / 唤醒保留所选模式。
 - 调用 `bsp_audio_deinit()` 前停止 PCM 读写并串行化音频生命周期操作。它休眠 codec 后释放 codec 接口、I2S 通道和 DMA，保留共用 I2C 总线。成功释放后重复调用幂等，并可重新选择任一初始化模式；休眠 / 通道释放失败保留句柄供显式重试，codec 引用释放失败仍需重启。休眠 / 唤醒会保留通道，不能代替资源释放。
-- I2S DMA 当前为 6 个 descriptor、每个 240 frame。更改 DMA 或 LVGL buffer 前必须联合评估内部 RAM。
+- I2S DMA 使用 6 个 descriptor：全双工采集每个 240 frame，仅播放模式每个 480 frame。后者在 48 kHz 且队列满时最多容纳 60 ms 音频，单声道 16 位 PCM 为 5,760 字节；初始双时隙配置占 11,520 字节。启动语音前先停止并释放播放 DMA。更改 DMA 或 LVGL buffer 前必须联合评估内部 RAM。
 - 调用 `bsp_audio_sleep()` 前必须停止所有 PCM 读写。该接口通过已打开的控制接口直接执行完整 ES8311 suspend 寄存器序列，不依赖 codec-device opened 标志，因此开机后从未播放也不需无声 open。它会回读 `0x00`、`0x01`、`0x0D`、`0x0E`、`0x12` 和 `0x45`，失败后等待 5 ms 重试一次完整序列，并即使音频从未打开也显式停止两条 I2S channel。
 - light sleep 返回后调用 `bsp_audio_wake()`，以休眠前格式重新打开 codec/I2S 通路。两个接口均为幂等操作；音频子系统不可用时视为无需暂停或恢复。deep sleep 唤醒会重启，改由正常 `bsp_audio_init()` 流程初始化。
 - REG0E 仍写入 `0xFF`，但回读只比较 bit6:0，掩码和预期值均为 `0x7F`。读到 `0x7F` 或 `0xFF` 都通过，bit7 读为零不应误判为 suspend 失败。其余五个寄存器继续逐字节完整校验。I2C 错误或参与校验的位不符，重试一次后仍返回失败：Low Power demo 取消 light sleep 并尝试恢复音频；deep sleep 则记录错误并继续终端关闭流程。

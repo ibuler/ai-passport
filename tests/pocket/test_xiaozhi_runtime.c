@@ -14,18 +14,20 @@ static unsigned server_port;
 static unsigned bootstrap_calls, activation_calls, listen_starts, encoded_frames, reply_turns, abort_commands;
 #define CONTINUOUS_REPLIES 20
 static bool activation_request, awaiting_start, start_notification;
-static unsigned startup_order;
+static unsigned startup_order, allocation_policy, task_attempts, player_stops;
+static bool reject_player_stop;
 static int failure;
 static bool failed_release, feeds_paused;
 static jmp_buf completed;
 static void *checked_malloc(size_t bytes) {
     if(((failure==6 || (failure==30 && listen_starts)) && bytes==1920) || failure==18 || (failure==31 && tasks) || (failure==32 && bytes==25600))return NULL;
+    if(allocation_policy==2 && bytes==25600 && tasks)return NULL;
     void *p=malloc(bytes);assert(p);
-    if(bytes==25600) { assert(!tasks);startup_order=1; }
+    if(bytes==25600) { startup_order=tasks?2:1; }
     allocations++;return p;
 }
 static void *checked_calloc(size_t n,size_t bytes) { void *p=checked_malloc(n*bytes);if(p)memset(p,0,n*bytes);return p; }
-static void checked_free(void *p) { if(p) { assert(allocations);allocations--;free(p); } }
+static void checked_free(void *p) { if(p) { assert(allocations);allocations--;free(p);if(!allocations && !tasks)startup_order=0; } }
 #define malloc checked_malloc
 #define calloc checked_calloc
 #define free checked_free
@@ -49,8 +51,10 @@ int xQueueSend(QueueHandle_t q,const void *p,uint32_t t) { (void)t;fake_queue_t 
 int xQueueReceive(QueueHandle_t q,void *p,uint32_t t) { (void)t;fake_queue_t *f=q;if(!f->count)return 0;*(packet_t *)p=f->p[f->begin];f->begin=(f->begin+1)%4;f->count--;return 1; }
 void vQueueDelete(QueueHandle_t q) { assert(queues);queues--;free(q); }
 int xTaskCreate(void (*f)(void *),const char *n,unsigned z,void *a,unsigned p,TaskHandle_t *out) {
-    (void)f;(void)n;(void)p;assert(z==28672 && !a && !tasks && feeds_paused && startup_order==1 && allocations==1);
-    if(failure==19)return 0;tasks++;awaiting_start=true;startup_order=2;*out=(void *)1;return pdPASS;
+    (void)f;(void)n;(void)p;assert(z==28672 && !a && !tasks && feeds_paused);
+    assert((startup_order==0 && allocations==0) || (startup_order==1 && allocations==1));
+    task_attempts++;
+    if(failure==19 || (allocation_policy==1 && allocations))return 0;tasks++;awaiting_start=true;startup_order=2;*out=(void *)1;return pdPASS;
 }
 void xTaskNotifyGive(TaskHandle_t t) { assert(t && awaiting_start && s_session && allocations==2);awaiting_start=false;start_notification=true; }
 unsigned ulTaskNotifyTake(bool clear,uint32_t wait) { assert(clear && wait==portMAX_DELAY && start_notification && s_session);start_notification=false;return 1; }
@@ -65,6 +69,7 @@ size_t heap_caps_get_largest_free_block(uint32_t c) { (void)c;return 40000; }
 void runtime_log(const char *t,const char *f,...) { (void)t;(void)f; }
 esp_err_t pf_feeds_pause(void) { assert(!tasks);feeds_paused=true;return ESP_OK; }
 esp_err_t pf_feeds_resume(void) { assert(!tasks && !allocations);feeds_paused=false;return ESP_OK; }
+esp_err_t pf_player_stop(void) { player_stops++;return reject_player_stop?ESP_ERR_TIMEOUT:ESP_OK; }
 bool pf_network_ready(void) { return true; }
 bool pf_http_take(uint32_t t) { (void)t;assert(!http_lock);http_lock=true;return true; }
 void pf_http_give(void) { assert(http_lock && !ws_live && !mqtt_live && !encoder_live && !decoder_live && (!hardware || failure==21) && !http_live);http_lock=false; }
@@ -215,6 +220,20 @@ int main(void)
         assert(!s_task && !s_session && !tasks && !allocations && !pf_xz_active() && !feeds_paused);
         if(server_socket>=0)close(server_socket);server_socket=-1;
     }
+    /* Simulate two fragmented-region placements: stack-first succeeds without
+     * retry; reserve-first is a bounded fallback with no abandoned task. */
+    failure=0;
+    for(allocation_policy=1;allocation_policy<=2;allocation_policy++) {
+        task_attempts=0;pf_xz_enter();
+        assert(pf_xz_toggle()==ESP_OK && tasks==1 && allocations==2);
+        assert(task_attempts==allocation_policy && startup_order==2);
+        atomic_store(&s_stop,true);
+        if(setjmp(completed)==0)worker(s_session);
+        assert(pf_xz_stop()==ESP_OK && !tasks && !allocations);
+    }
+    allocation_policy=0;reject_player_stop=true;pf_xz_enter();
+    assert(pf_xz_toggle()==ESP_FAIL && !tasks && !allocations && !feeds_paused);
+    reject_player_stop=false;assert(pf_xz_stop()==ESP_OK && player_stops);
     /* A second OK closes all active phases; late cleanup ACK must not restart. */
     const pf_xz_state_t phases[]={PF_XZ_CONNECTING,PF_XZ_LISTENING,PF_XZ_THINKING,PF_XZ_SPEAKING};
     failure=0;transport_udp=false;

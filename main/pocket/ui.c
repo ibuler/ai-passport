@@ -1,6 +1,6 @@
 #include "ui.h"
 #include "github.h"
-#include "furina.h"
+#include "portrait.h"
 #include "lvgl.h"
 #include "src/misc/cache/instance/lv_image_cache.h"
 #include <stdio.h>
@@ -28,10 +28,12 @@ static bool s_git_drawn;
 #define CHART_H 55
 #define CHART_STRIDE 104
 /* Indexed RGB palette + 4-bit pixels: 5.7 KiB, one LVGL image object. */
-static uint8_t s_git_pixels[64 + CHART_STRIDE * CHART_H] __attribute__((aligned(4)));
-static const lv_image_dsc_t s_git_dsc = {
+#define CHART_BYTES (64 + CHART_STRIDE * CHART_H)
+/* Own pixels only while home is visible; voice/audio reclaim the whole block. */
+static uint8_t *s_git_pixels;
+static lv_image_dsc_t s_git_dsc = {
     .header = {.magic=LV_IMAGE_HEADER_MAGIC, .cf=LV_COLOR_FORMAT_I4, .w=CHART_W, .h=CHART_H, .stride=CHART_STRIDE},
-    .data_size=sizeof(s_git_pixels), .data=s_git_pixels,
+    .data_size=CHART_BYTES, .data=NULL,
 };
 static FILE *s_image;
 static uint8_t *s_pixels;
@@ -139,6 +141,11 @@ void pf_ui_image_close(void)
     s_image = NULL;
     if (s_art) { lv_obj_delete(s_art); s_art = NULL; }
     free(s_pixels); s_pixels = NULL;
+    /* The caller holds the LVGL lock: delete all users before freeing pixels. */
+    if (s_git_chart) { lv_obj_delete(s_git_chart); s_git_chart = NULL; }
+    lv_image_cache_drop(&s_git_dsc);
+    free(s_git_pixels); s_git_pixels = NULL; s_git_dsc.data = NULL;
+    s_git_drawn = false;
 }
 static bool next_frame(void)
 {
@@ -220,7 +227,11 @@ void pf_ui_show(pf_page_t page, const pf_config_t *c, const pf_profile_t *profil
         s_aux = text("等待天气", 126, 197, 96, MUTED, NULL); lv_obj_set_height(s_aux, 46);
         lv_obj_set_y(s_aux,194); lv_obj_set_height(s_aux,20);
         block(18, 216, 204, 1, 0x294047);
-        s_git_chart = lv_image_create(s_root); lv_image_set_src(s_git_chart,&s_git_dsc); lv_obj_set_pos(s_git_chart,16,225);
+        s_git_pixels = calloc(1, CHART_BYTES);
+        if (s_git_pixels) {
+            s_git_dsc.data = s_git_pixels;
+            s_git_chart = lv_image_create(s_root); lv_image_set_src(s_git_chart,&s_git_dsc); lv_obj_set_pos(s_git_chart,16,225);
+        }
         block(18, 286, 204, 1, 0x294047);
         text("长按 确定:应用 下:后台", 24, 292, 192, MUTED, NULL);
     } else if (page == PF_LAUNCHER) {
@@ -235,8 +246,8 @@ void pf_ui_show(pf_page_t page, const pf_config_t *c, const pf_profile_t *profil
         text("小智", 24, 57, 95, INK, NULL);
         s_aux = text("音量 35%", 130, 57, 86, MUTED, NULL);
         s_portrait = lv_image_create(s_root);
-        lv_image_set_src(s_portrait, &pf_furina_frames[0]);
-        lv_obj_set_pos(s_portrait, 56, 102);
+        lv_image_set_src(s_portrait, &pf_portrait_frames[0]);
+        lv_obj_align(s_portrait, LV_ALIGN_TOP_MID, 0, 102);
         s_status = text("", 24, 80, 192, ACCENT, NULL);
         lv_label_set_long_mode(s_status, LV_LABEL_LONG_MODE_DOTS);
         s_subtitle = text("", 24, 239, 192, INK, NULL);
@@ -295,7 +306,7 @@ void pf_ui_xiaozhi(const pf_xz_snapshot_t *state, uint32_t ticks, uint8_t volume
 {
     if(s_page != PF_XIAOZHI || !s_portrait)return;
     unsigned frame = pf_xz_portrait(state, ticks);
-    if(frame != s_portrait_frame) { lv_image_set_src(s_portrait, &pf_furina_frames[frame]); s_portrait_frame = frame; }
+    if(frame != s_portrait_frame) { lv_image_set_src(s_portrait, &pf_portrait_frames[frame]); s_portrait_frame = frame; }
     char safe[256];
     if(state->state==PF_XZ_ERROR)pf_notice_text(safe,sizeof(safe),state->message);
     else supported(safe,sizeof(safe),state->message);
@@ -370,11 +381,11 @@ void pf_ui_details(const pf_profile_t *profile, const pf_weather_t *w, int64_t e
 }
 void pf_ui_github(const pf_github_t *g)
 {
-    if (s_page != PF_HOME) return;
+    if (s_page != PF_HOME || !s_git_chart || !s_git_pixels) return;
     pf_github_t fallback;
     if (!g->valid) { pf_github_default(&fallback); g=&fallback; }
     if (s_git_drawn && !memcmp(g->levels,s_git_cached.levels,sizeof(g->levels)) && !strcmp(g->username,s_git_cached.username)) return;
-    memset(s_git_pixels,0,sizeof(s_git_pixels));
+    memset(s_git_pixels,0,CHART_BYTES);
     static const uint32_t colors[] = {BG,0x1B3037,0x24523F,0x34865A,0x52B879,0x95E6AD};
     for (unsigned i=0;i<sizeof(colors)/sizeof(colors[0]);i++) {
         lv_color32_t c = lv_color_to_32(lv_color_hex(colors[i]),LV_OPA_COVER); memcpy(s_git_pixels+i*4,&c,4);

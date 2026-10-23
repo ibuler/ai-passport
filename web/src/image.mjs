@@ -1,5 +1,6 @@
 import {parseGIF, decompressFrame} from 'gifuct-js';
 import {SIZE, MAX_FRAMES} from './pack.mjs';
+const MAX_IMAGE_BYTES = 20 * 1024;
 function canvas(w, h) {
   const c = document.createElement('canvas'); c.width = w; c.height = h; return c;
 }
@@ -12,7 +13,7 @@ function sample(source) {
   return ctx.getImageData(0, 0, SIZE, SIZE).data;
 }
 export async function convertImage(file, animate) {
-  if (!file || file.size > 5 * 1024 * 1024) throw new Error('请选择不超过 5 MB 的图片');
+  if (!file || file.size > MAX_IMAGE_BYTES) throw new Error('请选择不超过 20 KB（20,480 字节）的图片');
   const data = await file.arrayBuffer();
   if (new TextDecoder().decode(data.slice(0, 6)).startsWith('GIF8')) {
     const gif = parseGIF(data), {width, height} = gif.lsd;

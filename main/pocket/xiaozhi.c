@@ -602,6 +602,33 @@ esp_err_t pf_xz_stop(void)
     view(PF_XZ_OFF,"");
     return pf_feeds_resume();
 }
+/* Largest-first avoids spending the only stack-sized free block on the
+ * smaller codec reserve. Retry the previous order once, since separate heap
+ * regions can favour either placement after music/network teardown. Neither
+ * attempt starts the worker before every allocation belongs to the session. */
+static bool allocate_session(bool reserve_first)
+{
+    void *reserve = NULL;
+    if (reserve_first) {
+        reserve = malloc(ENCODER_RESERVE_BYTES);
+        if (!reserve) { heap_log("encoder reserve allocation failed"); return false; }
+    }
+    if (xTaskCreate(worker,"pocket_xiaozhi",VOICE_STACK_BYTES,NULL,4,&s_task)!=pdPASS) {
+        s_task=NULL;heap_log("voice stack allocation failed");free(reserve);return false;
+    }
+    if (!reserve_first) {
+        reserve = malloc(ENCODER_RESERVE_BYTES);
+        if (!reserve) {
+            heap_log("encoder reserve allocation failed");vTaskDelete(s_task);s_task=NULL;return false;
+        }
+    }
+    s_session=calloc(1,sizeof(*s_session));
+    if (!s_session) {
+        heap_log("voice context allocation failed");vTaskDelete(s_task);s_task=NULL;free(reserve);return false;
+    }
+    s_session->socket=-1;s_session->encoder_reserve=reserve;
+    return true;
+}
 esp_err_t pf_xz_toggle(void)
 {
     if(s_task && (stopping() || !(xEventGroupGetBits(s_events)&DONE))) {
@@ -614,23 +641,13 @@ esp_err_t pf_xz_toggle(void)
         pf_xz_enter();
     }
     if(!s_task) {
+        if(pf_player_stop()!=ESP_OK) { view(PF_XZ_ERROR,"音频资源释放失败");return ESP_FAIL; }
         if(pf_feeds_pause()!=ESP_OK) { view(PF_XZ_ERROR,"后台停止超时，请重试");return ESP_ERR_TIMEOUT; }
         atomic_store(&s_stop,false);xEventGroupClearBits(s_events,DONE|CONNECTED|HELLO|FAULT);
-        /* Keep both large allocations contiguous before small context/TLS
-         * allocations. The worker waits for context ownership before starting. */
         heap_log("before session allocation");
-        void *reserve=malloc(ENCODER_RESERVE_BYTES);
-        if(!reserve) { view(PF_XZ_ERROR,"语音任务内存不足");return ESP_ERR_NO_MEM; }
-        if(xTaskCreate(worker,"pocket_xiaozhi",VOICE_STACK_BYTES,NULL,4,&s_task)!=pdPASS) {
-            free(reserve);view(PF_XZ_ERROR,"语音任务内存不足");return ESP_ERR_NO_MEM;
-        }
-        s_session=calloc(1,sizeof(*s_session));
-        if(!s_session) {
-            /* Not notified: this task owns no context, transport or hardware. */
-            vTaskDelete(s_task);s_task=NULL;free(reserve);
+        if(!allocate_session(false) && !allocate_session(true)) {
             view(PF_XZ_ERROR,"语音任务内存不足");return ESP_ERR_NO_MEM;
         }
-        s_session->socket=-1;s_session->encoder_reserve=reserve;
         xTaskNotifyGive(s_task);
     }
     return ESP_OK;

@@ -9,6 +9,7 @@ typedef int esp_err_t;
 #define ESP_ERR_INVALID_STATE -3
 #define ESP_ERR_TIMEOUT -4
 #define BIT0 1
+#define BIT1 2
 #define portMAX_DELAY UINT32_MAX
 #define pdMS_TO_TICKS(x) (x)
 #define pdTRUE 1
@@ -50,6 +51,7 @@ typedef struct {
 void esp_crt_bundle_attach(void);
 esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *);
 int esp_http_client_set_header(esp_http_client_handle_t,const char *,const char *);
+esp_err_t esp_http_client_set_timeout_ms(esp_http_client_handle_t,int);
 int esp_http_client_open(esp_http_client_handle_t,int);
 int64_t esp_http_client_fetch_headers(esp_http_client_handle_t);
 int esp_http_client_get_status_code(esp_http_client_handle_t);
@@ -81,3 +83,13 @@ esp_err_t bsp_audio_sleep(void);
 esp_err_t bsp_audio_set_format(uint32_t,uint8_t,uint8_t);
 void bsp_audio_set_volume(uint8_t);
 esp_err_t bsp_audio_write(const void *,size_t);
+
+/* Single producer/consumer stream used by the music pipeline. */
+typedef void *StreamBufferHandle_t;
+StreamBufferHandle_t xStreamBufferCreate(size_t,size_t);
+size_t xStreamBufferSend(StreamBufferHandle_t,const void *,size_t,uint32_t);
+size_t xStreamBufferReceive(StreamBufferHandle_t,void *,size_t,uint32_t);
+size_t xStreamBufferBytesAvailable(StreamBufferHandle_t);
+void vStreamBufferDelete(StreamBufferHandle_t);
+void vTaskSuspend(TaskHandle_t);
+int64_t esp_timer_get_time(void);
